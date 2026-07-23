@@ -14,6 +14,11 @@ const LAST_MODEL_KEY = "ifc-viewer:lastModelId";
 const SIDEBAR_KEY = "ifc-viewer:sidebarOpen";
 const savedViewsKey = (modelId: string) => `ifc-viewer:savedViews:${modelId}`;
 
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(1, Math.max(0, n));
+}
+
 function loadSavedViews(modelId: string): SavedView[] {
   if (typeof window === "undefined") return [];
   try {
@@ -76,6 +81,15 @@ type AppState = {
   selectedElement: SelectedElement | null;
   colorMode: ColorMode;
   renderMode: RenderMode;
+  /** Glass lighting panel (0–1 each). */
+  lighting: {
+    transparency: number;
+    color: number;
+    shadow: number;
+    indirectLight: number;
+  };
+  /** 0 = floor bottom (most cut), 1 = floor top (uncut). */
+  sliceProgress: number;
   isLoadingModel: boolean;
   loadError: string | null;
   loadProgress: number;
@@ -94,6 +108,15 @@ type AppState = {
   setSelectedElement: (el: SelectedElement | null) => void;
   setColorMode: (mode: ColorMode) => void;
   setRenderMode: (mode: RenderMode) => void;
+  setLighting: (
+    partial: Partial<{
+      transparency: number;
+      color: number;
+      shadow: number;
+      indirectLight: number;
+    }>,
+  ) => void;
+  setSliceProgress: (t: number) => void;
   setIsLoadingModel: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
   setLoadProgress: (progress: number, message?: string) => void;
@@ -123,6 +146,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedElement: null,
   colorMode: "heizlast",
   renderMode: "fullColor",
+  lighting: {
+    transparency: 0.7,
+    color: 1,
+    shadow: 0.55,
+    indirectLight: 0.45,
+  },
+  sliceProgress: 1,
   isLoadingModel: false,
   loadError: null,
   loadProgress: 0,
@@ -147,12 +177,25 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setFloors: (floors) => set({ floors }),
   setRooms: (rooms) => set({ rooms }),
-  setSelectedFloor: (floorId) => set({ selectedFloor: floorId }),
+  setSelectedFloor: (floorId) =>
+    set({ selectedFloor: floorId, sliceProgress: 1 }),
   setSelectedRoomId: (roomId) => set({ selectedRoomId: roomId }),
   setHoveredRoom: (room) => set({ hoveredRoom: room }),
   setSelectedElement: (el) => set({ selectedElement: el }),
   setColorMode: (mode) => set({ colorMode: mode }),
   setRenderMode: (mode) => set({ renderMode: mode }),
+  setLighting: (partial) =>
+    set((s) => ({
+      lighting: {
+        transparency: clamp01(partial.transparency ?? s.lighting.transparency),
+        color: clamp01(partial.color ?? s.lighting.color),
+        shadow: clamp01(partial.shadow ?? s.lighting.shadow),
+        indirectLight: clamp01(
+          partial.indirectLight ?? s.lighting.indirectLight,
+        ),
+      },
+    })),
+  setSliceProgress: (t) => set({ sliceProgress: clamp01(t) }),
   setIsLoadingModel: (loading) => set({ isLoadingModel: loading }),
   setLoadError: (error) => set({ loadError: error }),
   setLoadProgress: (progress, message) =>
@@ -214,5 +257,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedRoomId: null,
       hoveredRoom: null,
       selectedElement: null,
+      sliceProgress: 1,
     }),
 }));

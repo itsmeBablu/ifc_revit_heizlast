@@ -13,6 +13,8 @@ import { heizlastToColor, temperatureToColor } from "@/lib/colorMapping";
 import { flyTo, frameBoundingBox } from "@/lib/flyTo";
 import { getElementDetails } from "@/lib/ifcClient";
 import { debugLog } from "@/lib/debugLog";
+import { ViewCube } from "@/lib/viewCube";
+import { ClipSliceController } from "@/lib/clipSlice";
 import type { RenderMode, Room } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
 import { useModelScene } from "./ModelSceneContext";
@@ -41,26 +43,32 @@ function roomColorHex(room: Room, mode: "heizlast" | "temperature"): string {
     : temperatureToColor(room.temperature);
 }
 
-/** Per-color material cache — never share one mutable material across rooms. */
+/** Per-color material templates — always return a CLONE so rooms never share GPU state. */
 function createOverlayMaterialCache() {
   const cache = new Map<string, THREE.MeshStandardMaterial>();
   return {
     get(hex: string): THREE.MeshStandardMaterial {
       const key = hex.toLowerCase();
-      let mat = cache.get(key);
-      if (!mat) {
-        mat = new THREE.MeshStandardMaterial({
+      let proto = cache.get(key);
+      if (!proto) {
+        proto = new THREE.MeshStandardMaterial({
           color: new THREE.Color(hex),
           transparent: true,
-          opacity: 0.7,
-          roughness: 0.92,
+          opacity: 0.75,
+          roughness: 1,
           metalness: 0,
           envMapIntensity: 0,
-          depthWrite: false,
-          side: THREE.DoubleSide,
+          // depthWrite true stops transparent painter-sort flicker while orbiting
+          depthWrite: true,
+          depthTest: true,
+          side: THREE.FrontSide,
+          flatShading: true,
         });
-        cache.set(key, mat);
+        proto.userData.baseColorHex = hex;
+        cache.set(key, proto);
       }
+      const mat = proto.clone();
+      mat.userData.baseColorHex = hex;
       return mat;
     },
     clear() {
@@ -70,37 +78,78 @@ function createOverlayMaterialCache() {
   };
 }
 
+function isOverlayRoomMesh(obj: THREE.Object3D): obj is THREE.Mesh {
+  return (
+    obj instanceof THREE.Mesh &&
+    obj.userData.kind === "room" &&
+    obj.material instanceof THREE.MeshStandardMaterial
+  );
+}
+
+function isShellMesh(obj: THREE.Object3D): obj is THREE.Mesh {
+  return (
+    obj instanceof THREE.Mesh &&
+    !obj.userData.isClipStencil &&
+    obj.material instanceof THREE.MeshStandardMaterial
+  );
+}
+
 function applyRenderMode(
   mode: RenderMode,
   shell: THREE.Group | null,
   overlays: THREE.Group | null,
   showRoomOverlays: boolean,
+  lighting?: { transparency: number; color: number },
 ) {
   const wire = mode === "wireframe";
   const light = mode === "light";
   const textureOnly = mode === "texture";
+  const shellEmpty = !shell || shell.children.length === 0;
+  const baseOpacity = lighting?.transparency ?? 0.7;
+  const colorAmt = lighting?.color ?? 1;
 
   if (overlays) {
-    overlays.visible = showRoomOverlays && !textureOnly;
+    // Texture normally hides overlays; if shell was culled (room-only IFC), show gray volumes
+    overlays.visible =
+      (showRoomOverlays && !textureOnly) || (textureOnly && shellEmpty);
     overlays.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh)) return;
+      // Skip stencil-cap helper meshes parented under rooms
+      if (!isOverlayRoomMesh(obj)) return;
       const mat = obj.material as THREE.MeshStandardMaterial;
+      const baseHex =
+        (mat.userData.baseColorHex as string | undefined) ??
+        `#${mat.color.getHexString()}`;
       mat.wireframe = wire;
       mat.envMapIntensity = 0;
       mat.metalness = 0;
-      if (light) {
-        // Flat / unlit-looking: drive color via emissive so env map can't wash it out
+      mat.transparent = true;
+      mat.depthWrite = true;
+      mat.depthTest = true;
+      mat.flatShading = true;
+      mat.side = THREE.FrontSide;
+
+      if (textureOnly && shellEmpty) {
+        mat.color.setHex(0xc5cad3);
+        mat.emissive?.setHex(0x000000);
+        mat.emissiveIntensity = 0;
         mat.roughness = 1;
-        mat.emissive.copy(mat.color);
-        mat.emissiveIntensity = 0.45;
-        mat.opacity = 0.85;
+        mat.opacity = 1;
+        mat.transparent = false;
+      } else if (light) {
+        const c = new THREE.Color(baseHex).lerp(new THREE.Color(0xd0d4dc), 1 - colorAmt);
+        mat.color.copy(c);
+        mat.roughness = 1;
+        mat.emissive.copy(c);
+        mat.emissiveIntensity = 0.35 * colorAmt;
+        mat.opacity = Math.min(0.95, baseOpacity + 0.1);
       } else {
-        mat.roughness = 0.92;
+        const c = new THREE.Color(baseHex).lerp(new THREE.Color(0xb8bec8), 1 - colorAmt);
+        mat.color.copy(c);
+        mat.roughness = 1;
         mat.emissive.setHex(0x000000);
         mat.emissiveIntensity = 0;
-        mat.opacity = 0.7;
+        mat.opacity = baseOpacity;
       }
-      mat.transparent = true;
       mat.needsUpdate = true;
     });
   }
@@ -108,7 +157,7 @@ function applyRenderMode(
   if (shell) {
     shell.visible = true;
     shell.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh)) return;
+      if (!isShellMesh(obj)) return;
       const mat = obj.material as THREE.MeshStandardMaterial;
       mat.wireframe = wire;
       if (light) {
@@ -118,6 +167,8 @@ function applyRenderMode(
         mat.envMapIntensity = 0;
         mat.opacity = 0.55;
         mat.transparent = true;
+        mat.depthWrite = false;
+        mat.side = THREE.FrontSide;
       } else if (textureOnly) {
         mat.color.setHex(0xc5cad3);
         mat.roughness = 0.75;
@@ -125,21 +176,27 @@ function applyRenderMode(
         mat.envMapIntensity = 0.35;
         mat.opacity = 1;
         mat.transparent = false;
+        mat.depthWrite = true;
+        mat.side = THREE.FrontSide;
       } else if (mode === "realistic") {
         mat.color.setHex(0xb8bec8);
         mat.roughness = 0.65;
         mat.metalness = 0.08;
         mat.envMapIntensity = 0.85;
-        mat.opacity = 0.55;
+        mat.opacity = 0.35;
         mat.transparent = true;
+        mat.depthWrite = false;
+        mat.side = THREE.FrontSide;
       } else {
-        // fullColor — solid enough to read the building, transparent enough for overlays
+        // fullColor — quiet shell, no depth-write so rooms don't flicker while orbiting
         mat.color.setHex(0xb8bec8);
         mat.roughness = 0.85;
         mat.metalness = 0.02;
-        mat.envMapIntensity = 0.25;
-        mat.opacity = 0.5;
+        mat.envMapIntensity = 0.15;
+        mat.opacity = 0.22;
         mat.transparent = true;
+        mat.depthWrite = false;
+        mat.side = THREE.FrontSide;
       }
       mat.needsUpdate = true;
     });
@@ -160,6 +217,10 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const shellCloneRef = useRef<THREE.Group | null>(null);
   const overlaysRef = useRef<THREE.Group | null>(null);
   const helpersRef = useRef<THREE.Group | null>(null);
+  const sunRef = useRef<THREE.DirectionalLight | null>(null);
+  const ambientRef = useRef<THREE.AmbientLight | null>(null);
+  const viewCubeRef = useRef<ViewCube | null>(null);
+  const clipRef = useRef<ClipSliceController | null>(null);
   const roomMeshById = useRef<Map<string, THREE.Mesh>>(new Map());
   const materialCacheRef = useRef(createOverlayMaterialCache());
   const raycaster = useRef(new THREE.Raycaster());
@@ -168,7 +229,10 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const { shellGroup, rooms } = useModelScene();
   const colorMode = useAppStore((s) => s.colorMode);
   const renderMode = useAppStore((s) => s.renderMode);
+  const lighting = useAppStore((s) => s.lighting);
   const selectedFloor = useAppStore((s) => s.selectedFloor);
+  const sliceProgress = useAppStore((s) => s.sliceProgress);
+  const floors = useAppStore((s) => s.floors);
   const selectedRoomId = useAppStore((s) => s.selectedRoomId);
   const selectedElement = useAppStore((s) => s.selectedElement);
   const setHoveredRoom = useAppStore((s) => s.setHoveredRoom);
@@ -245,6 +309,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       antialias: true,
       alpha: false,
       powerPreference: "high-performance",
+      stencil: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -252,17 +317,43 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     renderer.toneMappingExposure = 1.1;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.localClippingEnabled = true;
     container.appendChild(renderer.domElement);
     renderer.domElement.className = "block h-full w-full touch-none";
+
+    const viewCube = new ViewCube();
+    viewCubeRef.current = viewCube;
+
+    const clip = new ClipSliceController();
+    clip.attach(scene);
+    clipRef.current = clip;
 
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
 
+    const ambient = new THREE.AmbientLight(0xffffff, 0.35);
+    scene.add(ambient);
+    ambientRef.current = ambient;
+
+    const sun = new THREE.DirectionalLight(0xfff5e8, 1.1);
+    sun.position.set(40, 80, 30);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 250;
+    sun.shadow.camera.left = -60;
+    sun.shadow.camera.right = 60;
+    sun.shadow.camera.top = 60;
+    sun.shadow.camera.bottom = -60;
+    sun.shadow.bias = -0.0002;
+    scene.add(sun);
+    sunRef.current = sun;
+
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.maxPolarAngle = Math.PI * 0.495;
+    controls.maxPolarAngle = Math.PI; // allow full orbit — avoids horizon clipping flicker
 
     const overlays = new THREE.Group();
     overlays.name = "room-overlays";
@@ -294,6 +385,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
+      viewCube.updateViewport(w, h);
     };
 
     const ro = new ResizeObserver(resize);
@@ -302,7 +394,14 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
 
     const tick = () => {
       controls.update();
+      viewCube.syncFromCamera(camera, controls.target);
+      const sz = new THREE.Vector2();
+      renderer.getSize(sz);
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, sz.x, sz.y);
       renderer.render(scene, camera);
+      viewCube.updateViewport(sz.x, sz.y);
+      viewCube.render(renderer);
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -317,12 +416,18 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       if (renderer.domElement.parentElement === container) {
         container.removeChild(renderer.domElement);
       }
+      viewCube.dispose();
+      clip.dispose();
+      viewCubeRef.current = null;
+      clipRef.current = null;
       sceneRef.current = null;
       cameraRef.current = null;
       rendererRef.current = null;
       controlsRef.current = null;
       overlaysRef.current = null;
       helpersRef.current = null;
+      sunRef.current = null;
+      ambientRef.current = null;
     };
   }, []);
 
@@ -334,6 +439,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
 
     materialCacheRef.current.clear();
     materialCacheRef.current = createOverlayMaterialCache();
+    clipRef.current?.clear();
 
     if (shellCloneRef.current) {
       scene.remove(shellCloneRef.current);
@@ -348,7 +454,13 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     }
 
     while (overlays.children.length) {
-      overlays.remove(overlays.children[0]);
+      const child = overlays.children[0];
+      overlays.remove(child);
+      if (child instanceof THREE.Mesh) {
+        const mat = child.material;
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat?.dispose();
+      }
     }
     roomMeshById.current.clear();
 
@@ -370,9 +482,10 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
             envMapIntensity: 0.25,
             transparent: true,
             opacity: 0.35,
-            side: THREE.DoubleSide,
+            depthWrite: false,
+            side: THREE.FrontSide,
           });
-          obj.castShadow = true;
+          obj.castShadow = false;
           obj.receiveShadow = true;
         }
       });
@@ -409,7 +522,18 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       shellCloneRef.current,
       overlays,
       true,
+      useAppStore.getState().lighting,
     );
+
+    // Register clip-cap targets (shell + room overlays)
+    const clipMeshes: THREE.Mesh[] = [];
+    shellCloneRef.current?.traverse((o) => {
+      if (isShellMesh(o)) clipMeshes.push(o);
+    });
+    overlays.traverse((o) => {
+      if (isOverlayRoomMesh(o)) clipMeshes.push(o);
+    });
+    clipRef.current?.registerMeshes(clipMeshes);
 
     if (hasModel) {
       requestAnimationFrame(() => fitToVisible());
@@ -428,29 +552,114 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       const room = byId.get(id);
       if (!room) continue;
       const hex = roomColorHex(room, colorMode);
+      const prev = mesh.material;
       mesh.material = materialCacheRef.current.get(hex);
       mesh.userData.colorHex = hex;
+      if (prev && prev !== mesh.material) {
+        if (Array.isArray(prev)) prev.forEach((m) => m.dispose());
+        else prev.dispose();
+      }
     }
     applyRenderMode(
       renderMode,
       shellCloneRef.current,
       overlaysRef.current,
       true,
+      lighting,
     );
-  }, [colorMode, rooms, roomsFromStore, renderMode]);
+    // Re-bind clipping planes after material swap
+    const st = useAppStore.getState();
+    if (st.selectedFloor && st.sliceProgress < 0.995) {
+      clipRef.current?.setEnabled(true);
+    }
+  }, [colorMode, rooms, roomsFromStore, renderMode, lighting]);
 
-  // Render mode changes
+  // Render mode + lighting
   useEffect(() => {
     applyRenderMode(
       renderMode,
       shellCloneRef.current,
       overlaysRef.current,
       true,
+      lighting,
     );
-  }, [renderMode]);
+
+    const sun = sunRef.current;
+    const ambient = ambientRef.current;
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    if (sun) {
+      sun.intensity = 0.2 + lighting.shadow * 1.6;
+      sun.castShadow = lighting.shadow > 0.05;
+    }
+    if (ambient) {
+      ambient.intensity = 0.15 + lighting.indirectLight * 0.7;
+    }
+    if (renderer) {
+      renderer.toneMappingExposure = 0.75 + lighting.indirectLight * 0.7;
+      renderer.shadowMap.enabled = lighting.shadow > 0.05;
+    }
+    if (scene) {
+      // Indirect: strengthen env contribution on shell when present
+      shellCloneRef.current?.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        const mat = obj.material as THREE.MeshStandardMaterial;
+        if (renderMode === "texture" || renderMode === "light") return;
+        mat.envMapIntensity =
+          (renderMode === "realistic" ? 0.5 : 0.1) +
+          lighting.indirectLight * 0.9;
+        mat.needsUpdate = true;
+      });
+    }
+  }, [renderMode, lighting]);
+
+  // Horizontal floor slice / clipping caps
+  useEffect(() => {
+    const clip = clipRef.current;
+    if (!clip) return;
+
+    if (!selectedFloor) {
+      clip.setEnabled(false);
+      return;
+    }
+
+    const sorted = [...floors].sort((a, b) => a.elevation - b.elevation);
+    const idx = sorted.findIndex((f) => f.id === selectedFloor);
+    if (idx < 0) {
+      clip.setEnabled(false);
+      return;
+    }
+
+    const floor = sorted[idx];
+    const next = sorted[idx + 1];
+    let yMax = next?.elevation;
+    if (yMax == null) {
+      const box = new THREE.Box3();
+      shellCloneRef.current?.traverse((o) => {
+        if (o instanceof THREE.Mesh && o.visible) box.expandByObject(o);
+      });
+      overlaysRef.current?.traverse((o) => {
+        if (o instanceof THREE.Mesh && o.visible) box.expandByObject(o);
+      });
+      yMax = box.isEmpty() ? floor.elevation + 3 : box.max.y;
+    }
+    const yMin = floor.elevation;
+    const span = Math.max(0.05, yMax - yMin);
+    // progress 1 = uncut (plane at top); 0 = cut at floor bottom
+    const y = yMin + sliceProgress * span;
+
+    if (sliceProgress >= 0.995) {
+      clip.setEnabled(false);
+    } else {
+      clip.setEnabled(true);
+      clip.setHeight(y);
+      clip.syncStencilTransforms();
+    }
+  }, [selectedFloor, sliceProgress, floors, shellGroup, rooms]);
 
   // Floor visibility
   useEffect(() => {
+
     const apply = (obj: THREE.Object3D) => {
       const floorId = obj.userData.floorId as string | undefined;
       if (!floorId) {
@@ -471,23 +680,28 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
 
   // Highlight selected room / element — do NOT fly the camera
   useEffect(() => {
+    const baseOpacity = useAppStore.getState().lighting.transparency;
     const selectedExpress = selectedElement?.expressId ?? null;
     for (const [id, mesh] of roomMeshById.current) {
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const isSel =
         id === selectedRoomId || mesh.userData.expressId === selectedExpress;
-      mat.opacity = isSel ? 0.9 : 0.7;
-      mat.emissive.setHex(isSel ? 0x223344 : 0x000000);
+      mat.opacity = isSel ? Math.min(0.95, baseOpacity + 0.2) : baseOpacity;
+      if (!isSel && useAppStore.getState().renderMode !== "light") {
+        mat.emissive.setHex(0x000000);
+      } else if (isSel) {
+        mat.emissive.setHex(0x223344);
+      }
       mat.needsUpdate = true;
     }
     shellCloneRef.current?.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh)) return;
+      if (!isShellMesh(obj)) return;
       const mat = obj.material as THREE.MeshStandardMaterial;
       const isSel = obj.userData.expressId === selectedExpress;
       mat.emissive.setHex(isSel ? 0x3b82f6 : 0x000000);
       mat.needsUpdate = true;
     });
-  }, [selectedRoomId, selectedElement]);
+  }, [selectedRoomId, selectedElement, lighting.transparency]);
 
   // Pointer: select only — no camera flyTo
   useEffect(() => {
@@ -513,6 +727,12 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
 
     const onMove = (e: PointerEvent) => {
       onPointerMove?.(e.clientX, e.clientY);
+      const cube = viewCubeRef.current;
+      if (cube?.containsClientPoint(e.clientX, e.clientY, canvas)) {
+        canvas.style.cursor = "pointer";
+        setHoveredRoom(null);
+        return;
+      }
       const hit = pickHit(e.clientX, e.clientY);
       if (!hit) {
         setHoveredRoom(null);
@@ -538,6 +758,19 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     };
 
     const onClick = (e: PointerEvent) => {
+      const cube = viewCubeRef.current;
+      const camera = cameraRef.current;
+      const controls = controlsRef.current;
+      if (cube && camera && controls && cube.containsClientPoint(e.clientX, e.clientY, canvas)) {
+        const zone = cube.pick(e.clientX, e.clientY, canvas);
+        if (zone) {
+          e.preventDefault();
+          e.stopPropagation();
+          void cube.snapMainCamera(zone, camera, controls, 600);
+        }
+        return;
+      }
+
       const hit = pickHit(e.clientX, e.clientY);
       if (!hit) {
         setSelectedRoomId(null);
@@ -575,12 +808,28 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       // Intentionally no flyTo — camera stays put
     };
 
+    const onPointerDown = (e: PointerEvent) => {
+      const cube = viewCubeRef.current;
+      const controls = controlsRef.current;
+      if (cube?.containsClientPoint(e.clientX, e.clientY, canvas) && controls) {
+        controls.enabled = false;
+      }
+    };
+    const onPointerUp = () => {
+      const controls = controlsRef.current;
+      if (controls) controls.enabled = true;
+    };
+
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerleave", onLeave);
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("click", onClick);
     return () => {
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("click", onClick);
     };
   }, [
@@ -593,7 +842,15 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     setSidebarOpen,
   ]);
 
-  return <div ref={containerRef} className={`${className ?? ""}`} data-viewer-root />;
+  return (
+    <div ref={containerRef} className={`relative ${className ?? ""}`} data-viewer-root>
+      {/* Glass frame around ViewCube scissor region (top-right) */}
+      <div
+        className="pointer-events-none absolute top-4 right-4 z-[5] h-[100px] w-[100px] rounded-2xl border border-white/50 shadow-[0_8px_28px_rgba(0,0,0,0.08)]"
+        aria-hidden
+      />
+    </div>
+  );
 });
 
 export default Viewer3D;

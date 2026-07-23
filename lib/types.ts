@@ -4,7 +4,10 @@ export type Room = {
   id: string;
   name: string;
   number: string;
+  /** Specific heat load for coloring (W/m²). */
   heatLoad: number;
+  /** Absolute Heizlast parameter from IFC (typically W), if present. */
+  heizlast: number | null;
   temperature: number;
   floorId: string;
   expressId: number;

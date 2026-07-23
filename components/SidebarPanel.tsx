@@ -11,6 +11,7 @@ import { heading } from "@/lib/designTokens";
 import { useAppStore } from "@/store/useAppStore";
 import { useModelScene } from "./ModelSceneContext";
 import type { Viewer3DHandle } from "./Viewer3D";
+import type { Floor } from "@/lib/types";
 
 type Props = {
   viewerRef: RefObject<Viewer3DHandle | null>;
@@ -18,6 +19,60 @@ type Props = {
 
 function Divider() {
   return <div className="mx-3 border-t border-zinc-300/50" />;
+}
+
+function FloorSliceSlider({
+  floors,
+  selectedFloor,
+}: {
+  floors: Floor[];
+  selectedFloor: string;
+}) {
+  const sliceProgress = useAppStore((s) => s.sliceProgress);
+  const setSliceProgress = useAppStore((s) => s.setSliceProgress);
+
+  const { yMin, yMax, heightLabel } = useMemo(() => {
+    const sorted = [...floors].sort((a, b) => a.elevation - b.elevation);
+    const idx = sorted.findIndex((f) => f.id === selectedFloor);
+    const floor = sorted[idx];
+    const next = sorted[idx + 1];
+    const yMin = floor?.elevation ?? 0;
+    const yMax = next?.elevation ?? yMin + 3;
+    const y = yMin + sliceProgress * Math.max(0.05, yMax - yMin);
+    const toM = (v: number) => (Math.abs(v) > 100 ? v / 1000 : v);
+    return {
+      yMin: toM(yMin),
+      yMax: toM(yMax),
+      heightLabel: `${toM(y).toFixed(2)} m`,
+    };
+  }, [floors, selectedFloor, sliceProgress]);
+
+  return (
+    <div className="rounded-xl border border-zinc-300/50 bg-white/45 px-3 py-2.5 backdrop-blur-sm">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold tracking-wide text-zinc-600">
+          Schnitthöhe
+        </p>
+        <p className="tabular-nums text-[11px] font-medium text-zinc-800">
+          {heightLabel}
+        </p>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={Math.round(sliceProgress * 100)}
+        onChange={(e) => setSliceProgress(Number(e.target.value) / 100)}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-300/70 accent-zinc-800"
+        aria-label="Floor slice height"
+      />
+      <div className="mt-1 flex justify-between text-[10px] text-zinc-400">
+        <span>{yMin.toFixed(1)} m</span>
+        <span>Voll</span>
+        <span>{yMax.toFixed(1)} m</span>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -289,6 +344,11 @@ export default function SidebarPanel({ viewerRef }: Props) {
                 })}
               </ul>
             )}
+
+            <FloorSliceSlider
+              floors={sortedFloors}
+              selectedFloor={selectedFloor}
+            />
           </>
         ) : (
           <p className="text-xs text-zinc-400">

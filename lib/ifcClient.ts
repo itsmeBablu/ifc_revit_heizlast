@@ -23,6 +23,8 @@ export const HEAT_LOAD_PROP_NAMES = [
   "Heizlastdichte",
   "Spezifische Heizlast",
   "spez. Heizlast",
+  "SC_Raum_spezifischeHeizlast",
+  "spezifischeHeizlast",
   "HeatingLoad",
   "HeatLoad",
   "HeatLoadPerArea",
@@ -302,6 +304,20 @@ function extractPlacementOrigin(line: {
   }
 }
 
+/** True when A∩B covers most of the smaller box — duplicate room/shell volumes. */
+function boxesOverlapHeavily(a: THREE.Box3, b: THREE.Box3): boolean {
+  const inter = a.clone().intersect(b);
+  if (inter.isEmpty()) return false;
+  const iSize = inter.getSize(new THREE.Vector3());
+  const interVol = Math.max(0, iSize.x) * Math.max(0, iSize.y) * Math.max(0, iSize.z);
+  if (interVol <= 1e-8) return false;
+  const aSize = a.getSize(new THREE.Vector3());
+  const bSize = b.getSize(new THREE.Vector3());
+  const aVol = Math.max(1e-9, aSize.x * aSize.y * aSize.z);
+  const bVol = Math.max(1e-9, bSize.x * bSize.y * bSize.z);
+  return interVol / Math.min(aVol, bVol) > 0.55;
+}
+
 function ingestFlatMesh(
   api: WebIFC.IfcAPI,
   modelID: number,
@@ -367,10 +383,22 @@ function flattenProps(psets: unknown[]): { pset: string; name: string; value: un
   return out;
 }
 
-function fuzzyHeatLoad(name: string): boolean {
+function fuzzyHeatLoadDensity(name: string): boolean {
   const n = name.toLowerCase();
   return (
-    n.includes("heizlast") ||
+    n.includes("spezifischeheizlast") ||
+    n.includes("heizlastdichte") ||
+    n.includes("heatloadperarea") ||
+    n.includes("specificheatload") ||
+    (n.includes("heizlast") && (n.includes("spezif") || n.includes("dichte") || n.includes("/m")))
+  );
+}
+
+function fuzzyHeatLoad(name: string): boolean {
+  const n = name.toLowerCase();
+  // Density-style names first (used with HEAT_LOAD_PROP_NAMES)
+  if (fuzzyHeatLoadDensity(name)) return true;
+  return (
     n.includes("heatload") ||
     n.includes("heat_load") ||
     n.includes("heatingload") ||
@@ -379,6 +407,36 @@ function fuzzyHeatLoad(name: string): boolean {
     n === "qh" ||
     n === "hl"
   );
+}
+
+/** Absolute Heizlast (W) — exact/near-exact "Heizlast", not spezifische / W/m². */
+function extractAbsoluteHeizlast(
+  flat: { pset: string; name: string; value: unknown }[],
+): number | null {
+  const preferExact: number[] = [];
+  const preferFuzzy: number[] = [];
+  for (const item of flat) {
+    const n = item.name.trim().toLowerCase().replace(/\s+/g, "");
+    if (
+      n.includes("spezifisch") ||
+      n.includes("dichte") ||
+      n.includes("perarea") ||
+      n.includes("/m")
+    ) {
+      continue;
+    }
+    const num = readNumber(item.value);
+    if (num == null) continue;
+    if (n === "heizlast" || n === "sc_raum_heizlast" || n.endsWith(".heizlast")) {
+      preferExact.push(num);
+    } else if (
+      (n.includes("heizlast") || n === "heatingload" || n === "heatload") &&
+      !n.includes("spezif")
+    ) {
+      preferFuzzy.push(num);
+    }
+  }
+  return preferExact[0] ?? preferFuzzy[0] ?? null;
 }
 
 function fuzzyTemperature(name: string): boolean {
@@ -422,8 +480,15 @@ async function extractSpaceProps(
   api: WebIFC.IfcAPI,
   modelID: number,
   expressId: number,
-): Promise<{ heatLoad: number; temperature: number; number: string; propDump: string[] }> {
+): Promise<{
+  heatLoad: number;
+  heizlast: number | null;
+  temperature: number;
+  number: string;
+  propDump: string[];
+}> {
   let heatLoad = 0;
+  let heizlast: number | null = null;
   let temperature = 20;
   let number = "";
   const propDump: string[] = [];
@@ -435,13 +500,32 @@ async function extractSpaceProps(
       propDump.push(`${item.pset}.${item.name}=${readString(item.value)}`);
     }
 
+    // W/m² for coloring — prefer spezifische / density names
     heatLoad =
+      extractNumericProp(
+        psets,
+        HEAT_LOAD_PSET_NAMES,
+        [
+          "SC_Raum_spezifischeHeizlast",
+          "spezifischeHeizlast",
+          "Spezifische Heizlast",
+          "Heizlastdichte",
+          "HeatLoadPerArea",
+          "SpecificHeatLoad",
+          ...HEAT_LOAD_PROP_NAMES,
+        ],
+        fuzzyHeatLoadDensity,
+      ) ??
       extractNumericProp(
         psets,
         HEAT_LOAD_PSET_NAMES,
         HEAT_LOAD_PROP_NAMES,
         fuzzyHeatLoad,
-      ) ?? 0;
+      ) ??
+      0;
+
+    heizlast = extractAbsoluteHeizlast(flat);
+
     temperature =
       extractNumericProp(
         psets,
@@ -467,7 +551,7 @@ async function extractSpaceProps(
     // Property lookup can fail on incomplete exports — keep defaults.
   }
 
-  return { heatLoad, temperature, number, propDump };
+  return { heatLoad, heizlast, temperature, number, propDump };
 }
 
 export type IfcSource = string | File | ArrayBuffer | Uint8Array;
@@ -830,26 +914,42 @@ export async function loadIfcModel(
         }
       }
 
-      // Type histogram for first shell pieces (debug)
-      if (shellGeoms.length > 0 && spaceGeoms.size === 0) {
-        const hist = new Map<string, number>();
-        for (const piece of shellGeoms.slice(0, 40)) {
-          try {
-            const name =
-              api.GetNameFromTypeCode(
-                api.GetLineType(modelID, piece.expressId),
-              ) || "Unknown";
-            hist.set(name, (hist.get(name) ?? 0) + 1);
-          } catch {
-            hist.set("?", (hist.get("?") ?? 0) + 1);
+      // Always strip shell meshes that heavily overlap room volumes — otherwise
+      // Full Color shows coplanar translucent shell + overlays (white z-fight lines).
+      if (spaceGeoms.size > 0 && shellGeoms.length > 0) {
+        const roomBoxes: THREE.Box3[] = [];
+        for (const geom of spaceGeoms.values()) {
+          geom.computeBoundingBox();
+          if (geom.boundingBox && !geom.boundingBox.isEmpty()) {
+            roomBoxes.push(geom.boundingBox.clone());
           }
         }
-        debugLog(
-          "ifcClient",
-          "shell type sample (no space geoms yet)",
-          "warn",
-          Object.fromEntries(hist),
-        );
+
+        const kept: typeof shellGeoms = [];
+        let culled = 0;
+        for (const piece of shellGeoms) {
+          piece.geom.computeBoundingBox();
+          const box = piece.geom.boundingBox;
+          const overlaps =
+            box != null &&
+            !box.isEmpty() &&
+            roomBoxes.some((rb) => boxesOverlapHeavily(box, rb));
+          if (overlaps) {
+            piece.geom.dispose();
+            culled += 1;
+          } else {
+            kept.push(piece);
+          }
+        }
+        shellGeoms.length = 0;
+        shellGeoms.push(...kept);
+        if (culled > 0) {
+          debugLog(
+            "ifcClient",
+            `culled ${culled} shell mesh(es) overlapping room volumes (z-fight fix)`,
+            "ok",
+          );
+        }
       }
 
       debugLog(
@@ -923,6 +1023,7 @@ export async function loadIfcModel(
           name,
           number: props.number || tagNumber,
           heatLoad: props.heatLoad,
+          heizlast: props.heizlast,
           temperature: props.temperature,
           floorId,
           expressId: spaceExpressId,

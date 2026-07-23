@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { BsFullscreen, BsFullscreenExit } from "react-icons/bs";
 import { VscSymbolColor } from "react-icons/vsc";
 import { HiOutlineSquare3Stack3D } from "react-icons/hi2";
+import { CiLight } from "react-icons/ci";
 import type { RenderMode } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
 import GlassPanel from "./GlassPanel";
@@ -24,14 +25,52 @@ type Props = {
   targetRef: RefObject<HTMLElement | null>;
 };
 
+type Panel = "shade" | "light" | null;
+
+function SliderRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <label className="block px-1 py-1.5">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium text-zinc-700">{label}</span>
+        <span className="tabular-nums text-[10px] text-zinc-500">
+          {Math.round(value * 100)}%
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={Math.round(value * 100)}
+        onChange={(e) => onChange(Number(e.target.value) / 100)}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-300/70 accent-zinc-800"
+      />
+    </label>
+  );
+}
+
 export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const renderMode = useAppStore((s) => s.renderMode);
   const setRenderMode = useAppStore((s) => s.setRenderMode);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const lighting = useAppStore((s) => s.lighting);
+  const setLighting = useAppStore((s) => s.setLighting);
+
+  const [panel, setPanel] = useState<Panel>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [menuPos, setMenuPos] = useState({ bottom: 0, left: 0 });
+  const [shadePos, setShadePos] = useState({ bottom: 0, left: 0 });
+  const [lightPos, setLightPos] = useState({ bottom: 0, left: 0 });
+
   const shadeBtnRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const lightBtnRef = useRef<HTMLButtonElement>(null);
+  const shadeMenuRef = useRef<HTMLDivElement>(null);
+  const lightMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -40,32 +79,47 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   }, []);
 
   useLayoutEffect(() => {
-    if (!menuOpen || !shadeBtnRef.current) return;
+    if (panel !== "shade" || !shadeBtnRef.current) return;
     const update = () => {
       const r = shadeBtnRef.current!.getBoundingClientRect();
-      setMenuPos({
+      setShadePos({
         bottom: window.innerHeight - r.top + 10,
         left: r.left + r.width / 2,
       });
     };
     update();
     window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
+    return () => window.removeEventListener("resize", update);
+  }, [panel]);
+
+  useLayoutEffect(() => {
+    if (panel !== "light" || !lightBtnRef.current) return;
+    const update = () => {
+      const r = lightBtnRef.current!.getBoundingClientRect();
+      setLightPos({
+        bottom: window.innerHeight - r.top + 10,
+        left: r.left + r.width / 2,
+      });
     };
-  }, [menuOpen]);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [panel]);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!panel) return;
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (menuRef.current?.contains(t)) return;
-      if (shadeBtnRef.current?.contains(t)) return;
-      setMenuOpen(false);
+      if (panel === "shade") {
+        if (shadeMenuRef.current?.contains(t)) return;
+        if (shadeBtnRef.current?.contains(t)) return;
+      }
+      if (panel === "light") {
+        if (lightMenuRef.current?.contains(t)) return;
+        if (lightBtnRef.current?.contains(t)) return;
+      }
+      setPanel(null);
     };
-    // Defer so the opening click doesn't immediately close
     const id = window.setTimeout(() => {
       document.addEventListener("mousedown", onDoc);
     }, 0);
@@ -73,7 +127,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
       window.clearTimeout(id);
       document.removeEventListener("mousedown", onDoc);
     };
-  }, [menuOpen]);
+  }, [panel]);
 
   const toggleFullscreen = async () => {
     const el = targetRef.current ?? document.documentElement;
@@ -84,21 +138,24 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
         await document.exitFullscreen();
       }
     } catch {
-      // ignore — browser may block
+      // ignore
     }
   };
 
   const btn =
     "flex h-10 w-10 items-center justify-center rounded-2xl text-zinc-700 transition-colors hover:bg-white/40 active:scale-95";
 
-  const menu =
-    menuOpen &&
+  const glassPopover =
+    "fixed z-[80] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/40 bg-white/70 shadow-lg backdrop-blur-xl";
+
+  const shadeMenu =
+    panel === "shade" &&
     typeof document !== "undefined" &&
     createPortal(
       <div
-        ref={menuRef}
-        className="fixed z-[80] max-h-52 w-44 -translate-x-1/2 overflow-y-auto rounded-2xl border border-white/40 bg-white/75 p-1.5 shadow-lg backdrop-blur-xl"
-        style={{ bottom: menuPos.bottom, left: menuPos.left }}
+        ref={shadeMenuRef}
+        className={`${glassPopover} max-h-52 w-44 overflow-y-auto p-1.5`}
+        style={{ bottom: shadePos.bottom, left: shadePos.left }}
         role="menu"
       >
         {MODES.map((m) => (
@@ -108,7 +165,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
             role="menuitem"
             onClick={() => {
               setRenderMode(m.id);
-              setMenuOpen(false);
+              setPanel(null);
             }}
             className={`block w-full rounded-xl px-3 py-2 text-left text-xs font-medium transition-colors ${
               renderMode === m.id
@@ -119,6 +176,44 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
             {m.label}
           </button>
         ))}
+      </div>,
+      document.body,
+    );
+
+  const lightMenu =
+    panel === "light" &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <div
+        ref={lightMenuRef}
+        className={`${glassPopover} w-56 p-2`}
+        style={{ bottom: lightPos.bottom, left: lightPos.left }}
+        role="dialog"
+        aria-label="Lighting"
+      >
+        <p className="mb-1 px-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+          Lighting
+        </p>
+        <SliderRow
+          label="Transparency"
+          value={lighting.transparency}
+          onChange={(transparency) => setLighting({ transparency })}
+        />
+        <SliderRow
+          label="Color"
+          value={lighting.color}
+          onChange={(color) => setLighting({ color })}
+        />
+        <SliderRow
+          label="Shadow"
+          value={lighting.shadow}
+          onChange={(shadow) => setLighting({ shadow })}
+        />
+        <SliderRow
+          label="Indirect light"
+          value={lighting.indirectLight}
+          onChange={(indirectLight) => setLighting({ indirectLight })}
+        />
       </div>,
       document.body,
     );
@@ -145,13 +240,29 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
             <button
               ref={shadeBtnRef}
               type="button"
-              className={`${btn} ${menuOpen ? "bg-white/40" : ""}`}
+              className={`${btn} ${panel === "shade" ? "bg-white/40" : ""}`}
               aria-label="Shading mode"
               title="Shading mode"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((v) => !v)}
+              aria-expanded={panel === "shade"}
+              onClick={() =>
+                setPanel((p) => (p === "shade" ? null : "shade"))
+              }
             >
               <VscSymbolColor className="h-5 w-5" />
+            </button>
+
+            <button
+              ref={lightBtnRef}
+              type="button"
+              className={`${btn} ${panel === "light" ? "bg-white/40" : ""}`}
+              aria-label="Lighting"
+              title="Lighting"
+              aria-expanded={panel === "light"}
+              onClick={() =>
+                setPanel((p) => (p === "light" ? null : "light"))
+              }
+            >
+              <CiLight className="h-5 w-5" />
             </button>
 
             <button
@@ -170,7 +281,8 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
           </div>
         </GlassPanel>
       </div>
-      {menu}
+      {shadeMenu}
+      {lightMenu}
     </>
   );
 }
