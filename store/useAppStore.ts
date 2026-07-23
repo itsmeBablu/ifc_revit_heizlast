@@ -121,6 +121,8 @@ type AppState = {
   presentationPrevFloor: string | null;
   /** Floor focused in the presentation rooms list (does not isolate 3D). */
   presentationFloorId: string | null;
+  /** When true, show floor picker + room list in presentation panel. */
+  presentationRoomsOpen: boolean;
   sliceProgress: number;
   isLoadingModel: boolean;
   loadError: string | null;
@@ -156,6 +158,7 @@ type AppState = {
   setSliceProgress: (t: number) => void;
   setPresentationView: (active: boolean) => void;
   setPresentationFloorId: (floorId: string | null) => void;
+  setPresentationRoomsOpen: (open: boolean) => void;
   setIsLoadingModel: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
   setLoadProgress: (progress: number, message?: string) => void;
@@ -238,6 +241,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isPresentationView: false,
   presentationPrevFloor: null,
   presentationFloorId: null,
+  presentationRoomsOpen: false,
   sliceProgress: 0.5,
   isLoadingModel: false,
   loadError: null,
@@ -326,6 +330,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         presentationPrevFloor: s.selectedFloor,
         selectedFloor: null,
         presentationFloorId: defaultFloor,
+        presentationRoomsOpen: false,
         selectedRoomId: null,
         selectedElement: null,
         rightPanelOpen: true,
@@ -337,6 +342,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedFloor: s.presentationPrevFloor,
         presentationPrevFloor: null,
         presentationFloorId: null,
+        presentationRoomsOpen: false,
         selectedRoomId: null,
         selectedElement: null,
       });
@@ -348,6 +354,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedRoomId: null,
       selectedElement: null,
     }),
+  setPresentationRoomsOpen: (open) => {
+    if (!open) {
+      set({
+        presentationRoomsOpen: false,
+        selectedRoomId: null,
+        selectedElement: null,
+      });
+    } else {
+      set({ presentationRoomsOpen: true });
+    }
+  },
   setIsLoadingModel: (loading) => set({ isLoadingModel: loading }),
   setLoadError: (error) => set({ loadError: error }),
   setLoadProgress: (progress, message) =>
@@ -411,6 +428,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       isPresentationView: false,
       presentationPrevFloor: null,
       presentationFloorId: null,
+      presentationRoomsOpen: false,
     }),
 }));
 

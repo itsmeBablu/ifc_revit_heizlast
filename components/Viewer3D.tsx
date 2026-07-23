@@ -867,19 +867,26 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
         if (m.visible) box.expandByObject(m);
       }
       if (box.isEmpty()) return;
-      const { target } = frameBoundingBox(box, camera, 1.55);
       const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
-      // Top-corner view pitched ~15° down toward the building
-      const elev = (15 * Math.PI) / 180;
-      const dist = Math.max(size.length() * 1.25, size.y * 2.4, size.x * 1.4, 8);
+      // Same corner azimuth, slightly lower pitch
+      const elev = (34 * Math.PI) / 180;
       const dir = new THREE.Vector3(
         Math.cos(elev),
         Math.sin(elev),
         Math.cos(elev),
       ).normalize();
+
+      // Fit full exploded stack to the viewport
+      const sphere = new THREE.Sphere();
+      box.getBoundingSphere(sphere);
+      const vFov = (camera.fov * Math.PI) / 180;
+      const fitH = sphere.radius / Math.sin(vFov / 2);
+      const fitW =
+        sphere.radius /
+        Math.sin(Math.atan(Math.tan(vFov / 2) * camera.aspect));
+      const dist = Math.max(fitH, fitW) * 1.12;
       const isoPos = center.clone().add(dir.multiplyScalar(dist));
-      void flyTo(camera, controls, isoPos, target, 900);
+      void flyTo(camera, controls, isoPos, center, 900);
     };
 
     if (isPresentationView) {
