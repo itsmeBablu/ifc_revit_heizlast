@@ -419,7 +419,7 @@ export default function ViewerApp() {
             />
           );
         })()}
-        {!isPresentationView && <DebugPanel />}
+        <DebugPanel />
         <ViewerToolbar viewerRef={viewerRef} targetRef={rootRef} />
 
         {/* LEFT — Floors & Rooms (hidden during Presentation View) */}
