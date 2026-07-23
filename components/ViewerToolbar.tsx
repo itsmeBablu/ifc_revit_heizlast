@@ -8,7 +8,7 @@ import { HiOutlineSquare3Stack3D } from "react-icons/hi2";
 import { CiLight } from "react-icons/ci";
 import { LiaStreetViewSolid } from "react-icons/lia";
 import type { RenderMode } from "@/lib/types";
-import { useAppStore } from "@/store/useAppStore";
+import { SCENE_BACKGROUND_PRESETS, useAppStore } from "@/store/useAppStore";
 import GlassPanel from "./GlassPanel";
 import Slider from "./ui/Slider";
 import type { Viewer3DHandle } from "./Viewer3D";
@@ -39,8 +39,8 @@ function SliderRow({
   onChange: (v: number) => void;
 }) {
   return (
-    <label className="block px-1 py-1.5">
-      <div className="mb-1 flex items-center justify-between gap-2">
+    <label className="block px-1 py-0.5">
+      <div className="mb-0.5 flex items-center justify-between gap-2">
         <span className="text-[11px] font-medium text-zinc-700">{label}</span>
         <span className="tabular-nums text-[10px] text-zinc-500">
           {Math.round(value * 100)}%
@@ -62,6 +62,8 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const setRenderMode = useAppStore((s) => s.setRenderMode);
   const lighting = useAppStore((s) => s.lighting);
   const setLighting = useAppStore((s) => s.setLighting);
+  const sceneBackground = useAppStore((s) => s.sceneBackground);
+  const setSceneBackground = useAppStore((s) => s.setSceneBackground);
   const addSavedView = useAppStore((s) => s.addSavedView);
   const activeModelId = useAppStore((s) => s.activeModelId);
 
@@ -220,12 +222,12 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
     createPortal(
       <div
         ref={lightMenuRef}
-        className={`${glassPopover} w-56 p-2`}
+        className={`${glassPopover} max-h-[min(380px,70vh)] w-56 overflow-y-auto p-1.5`}
         style={{ bottom: lightPos.bottom, left: lightPos.left }}
         role="dialog"
         aria-label="Lighting"
       >
-        <p className="mb-1 px-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+        <p className="mb-0.5 px-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
           Lighting
         </p>
         <SliderRow
@@ -248,6 +250,39 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
           value={lighting.indirectLight}
           onChange={(indirectLight) => setLighting({ indirectLight })}
         />
+
+        <div className="mt-1 border-t border-zinc-300/50 pt-1.5">
+          <p className="mb-1 px-1 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+            3D background
+          </p>
+          <div className="grid grid-cols-3 gap-1 px-0.5">
+            {SCENE_BACKGROUND_PRESETS.map((p) => {
+              const active =
+                sceneBackground.toLowerCase() === p.hex.toLowerCase();
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  title={p.label}
+                  onClick={() => setSceneBackground(p.hex)}
+                  className={`flex flex-col items-center gap-0.5 rounded-lg border px-1 py-1 transition-colors ${
+                    active
+                      ? "border-zinc-500/50 bg-white/70"
+                      : "border-transparent hover:bg-white/50"
+                  }`}
+                >
+                  <span
+                    className="h-5 w-full rounded-md border border-zinc-400/30"
+                    style={{ backgroundColor: p.hex }}
+                  />
+                  <span className="text-[9px] font-medium leading-tight text-zinc-600">
+                    {p.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>,
       document.body,
     );

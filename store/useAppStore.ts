@@ -15,7 +15,24 @@ const LAST_MODEL_KEY = "ifc-viewer:lastModelId";
 const LEFT_PANEL_KEY = "ifc-viewer:leftPanelOpen";
 const RIGHT_PANEL_KEY = "ifc-viewer:rightPanelOpen";
 const PALETTE_KEY = "ifc-viewer:colorPalette";
+const BG_KEY = "ifc-viewer:sceneBackground";
 const savedViewsKey = (modelId: string) => `ifc-viewer:savedViews:${modelId}`;
+
+/** Preset 3D viewport background colors (environment feel). */
+export const SCENE_BACKGROUND_PRESETS: {
+  id: string;
+  label: string;
+  hex: string;
+}[] = [
+  { id: "softGray", label: "Soft gray", hex: "#e8eaed" },
+  { id: "coolGray", label: "Cool gray", hex: "#cfd5df" },
+  { id: "lightBlue", label: "Light blue", hex: "#c8d9ea" },
+  { id: "sky", label: "Sky", hex: "#b4cce0" },
+  { id: "mist", label: "Mist", hex: "#dce6ef" },
+  { id: "warmGray", label: "Warm gray", hex: "#e4e0da" },
+];
+
+const DEFAULT_BG = SCENE_BACKGROUND_PRESETS[0].hex;
 
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0;
@@ -96,6 +113,8 @@ type AppState = {
     shadow: number;
     indirectLight: number;
   };
+  /** Hex color for the 3D scene background. */
+  sceneBackground: string;
   /** 0 = floor bottom, 0.5 = mid (default), 1 = floor top. */
   sliceProgress: number;
   isLoadingModel: boolean;
@@ -128,6 +147,7 @@ type AppState = {
       indirectLight: number;
     }>,
   ) => void;
+  setSceneBackground: (hex: string) => void;
   setSliceProgress: (t: number) => void;
   setIsLoadingModel: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
@@ -164,13 +184,29 @@ function initialPalette(): ColorPaletteId {
   if (typeof window === "undefined") return "standard";
   try {
     const raw = localStorage.getItem(PALETTE_KEY);
-    if (raw === "softPastel" || raw === "warmPastel" || raw === "standard") {
+    if (
+      raw === "softPastel" ||
+      raw === "warmPastel" ||
+      raw === "standard" ||
+      raw === "dark"
+    ) {
       return raw;
     }
   } catch {
     // ignore
   }
   return "standard";
+}
+
+function initialBackground(): string {
+  if (typeof window === "undefined") return DEFAULT_BG;
+  try {
+    const raw = localStorage.getItem(BG_KEY);
+    if (raw && /^#[0-9a-fA-F]{6}$/.test(raw)) return raw;
+  } catch {
+    // ignore
+  }
+  return DEFAULT_BG;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -191,6 +227,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     shadow: 0.55,
     indirectLight: 0.45,
   },
+  sceneBackground: initialBackground(),
   sliceProgress: 0.5,
   isLoadingModel: false,
   loadError: null,
@@ -251,6 +288,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         ),
       },
     })),
+  setSceneBackground: (hex) => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(BG_KEY, hex);
+      } catch {
+        // ignore
+      }
+    }
+    set({ sceneBackground: hex });
+  },
   setSliceProgress: (t) => set({ sliceProgress: clamp01(t) }),
   setIsLoadingModel: (loading) => set({ isLoadingModel: loading }),
   setLoadError: (error) => set({ loadError: error }),

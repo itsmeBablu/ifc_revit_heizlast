@@ -83,6 +83,16 @@ export class ClipSliceController {
     for (const e of this.entries) this.syncCapFromMesh(e);
   }
 
+  /** Force rebuild of stencil groups + colored cap planes from current meshes. */
+  rebuildCaps() {
+    if (this.enabled && this.capsEnabled) {
+      this.buildCaps();
+      this.syncAllCapAppearance();
+    } else {
+      this.clearCaps();
+    }
+  }
+
   clear() {
     this.clearCaps();
     this.clearPlanesFromTracked();
@@ -143,7 +153,9 @@ export class ClipSliceController {
     this.clearCaps();
     let i = 1;
     for (const mesh of this.tracked) {
-      if (!mesh.geometry || !mesh.visible) continue;
+      // Do not skip by mesh.visible — on floor change, isolation may not have
+      // applied yet; tracked list is already scoped to the selected floor.
+      if (!mesh.geometry) continue;
 
       mesh.updateWorldMatrix(true, false);
       this._box.setFromObject(mesh);

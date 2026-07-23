@@ -93,7 +93,7 @@ export default function LegendPanel() {
                 <span key={t}>{t}</span>
               ))}
             </div>
-            <p className="mt-0.5 text-[10px] text-zinc-400">W/m² · click colors</p>
+            <p className="mt-0.5 text-[10px] text-zinc-400">W/m²</p>
           </div>
         ) : (
           <div>
@@ -116,7 +116,6 @@ export default function LegendPanel() {
                 </div>
               ))}
             </button>
-            <p className="mt-1 text-[10px] text-zinc-400">click colors</p>
           </div>
         )}
 

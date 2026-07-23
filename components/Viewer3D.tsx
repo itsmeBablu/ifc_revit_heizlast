@@ -274,6 +274,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const activeColorPalette = useAppStore((s) => s.activeColorPalette);
   const renderMode = useAppStore((s) => s.renderMode);
   const lighting = useAppStore((s) => s.lighting);
+  const sceneBackground = useAppStore((s) => s.sceneBackground);
   const selectedFloor = useAppStore((s) => s.selectedFloor);
   const sliceProgress = useAppStore((s) => s.sliceProgress);
   const floors = useAppStore((s) => s.floors);
@@ -344,7 +345,9 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     if (!container) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xe8eaed);
+    scene.background = new THREE.Color(
+      useAppStore.getState().sceneBackground || 0xe8eaed,
+    );
 
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
     camera.position.set(20, 20, 20);
@@ -605,7 +608,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       lighting,
     );
     clipRef.current?.rebindMaterials();
-    clipRef.current?.syncAllCapAppearance();
+    clipRef.current?.rebuildCaps();
   }, [colorMode, activeColorPalette, rooms, roomsFromStore, renderMode, lighting]);
 
   // Render mode + lighting
@@ -648,14 +651,38 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     }
   }, [renderMode, lighting]);
 
-  // Register selected-floor meshes for clipping + solid caps
+  // 3D viewport background color
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    scene.background = new THREE.Color(sceneBackground);
+  }, [sceneBackground]);
+
+  // Single slice path: isolate floor → clip → rebuild colored caps → set height
   useEffect(() => {
     const clip = clipRef.current;
+
+    const applyFloorVisibility = (obj: THREE.Object3D) => {
+      const floorId = obj.userData.floorId as string | undefined;
+      if (!floorId) {
+        obj.visible = true;
+        return;
+      }
+      obj.visible = selectedFloor == null || floorId === selectedFloor;
+    };
+
+    shellCloneRef.current?.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) applyFloorVisibility(obj);
+    });
+    overlaysRef.current?.children.forEach((child) => applyFloorVisibility(child));
+
     if (!clip) return;
 
     if (!selectedFloor) {
       clip.clear();
       clip.setEnabled(false);
+      clip.setCapsEnabled(false);
+      requestAnimationFrame(() => fitToVisible());
       return;
     }
 
@@ -671,31 +698,46 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       }
     });
 
-    clip.setMeshes(floorMeshes);
-    clip.setEnabled(true);
-    clip.setCapsEnabled(true);
+    for (const m of floorMeshes) m.visible = true;
 
     const bounds = floorWorldYBounds(selectedFloor, [
       shellCloneRef.current,
       overlaysRef.current,
     ]);
-    if (bounds) {
-      const span = Math.max(0.05, bounds.yMax - bounds.yMin);
-      const t = useAppStore.getState().sliceProgress;
-      clip.setHeight(bounds.yMin + t * span);
-      debugLog(
-        "Viewer3D",
-        `slice Y [${bounds.yMin.toFixed(2)}, ${bounds.yMax.toFixed(2)}] n=${floorMeshes.length}`,
-        floorMeshes.length ? "ok" : "warn",
-      );
-    }
-  }, [selectedFloor, floors, shellGroup, rooms, colorMode, activeColorPalette]);
+    const t = useAppStore.getState().sliceProgress;
+    const heightY = bounds
+      ? bounds.yMin + t * Math.max(0.05, bounds.yMax - bounds.yMin)
+      : 0;
 
-  // Instant plane height while dragging — world Y from mesh AABB
+    clip.setHeight(heightY);
+    clip.setMeshes(floorMeshes);
+    clip.setEnabled(true);
+    clip.setCapsEnabled(true);
+    clip.rebuildCaps();
+    clip.setHeight(heightY);
+
+    debugLog(
+      "Viewer3D",
+      `rebuildSliceCaps floor=${selectedFloor} n=${floorMeshes.length} y=${heightY.toFixed(2)} mode=${colorMode} pal=${activeColorPalette}`,
+      floorMeshes.length ? "ok" : "warn",
+    );
+
+    requestAnimationFrame(() => fitToVisible());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedFloor,
+    colorMode,
+    activeColorPalette,
+    floors,
+    shellGroup,
+    rooms,
+    roomsFromStore,
+  ]);
+
+  // Instant plane/cap height while dragging — no full rebuild
   useEffect(() => {
     const clip = clipRef.current;
     if (!clip || !selectedFloor) return;
-
     const bounds = floorWorldYBounds(selectedFloor, [
       shellCloneRef.current,
       overlaysRef.current,
@@ -704,27 +746,6 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     const span = Math.max(0.05, bounds.yMax - bounds.yMin);
     clip.setHeight(bounds.yMin + sliceProgress * span);
   }, [selectedFloor, sliceProgress, floors, shellGroup, rooms]);
-
-  // Floor visibility
-  useEffect(() => {
-
-    const apply = (obj: THREE.Object3D) => {
-      const floorId = obj.userData.floorId as string | undefined;
-      if (!floorId) {
-        obj.visible = true;
-        return;
-      }
-      obj.visible = selectedFloor == null || floorId === selectedFloor;
-    };
-
-    shellCloneRef.current?.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) apply(obj);
-    });
-    overlaysRef.current?.children.forEach((child) => apply(child));
-    // Fit only when floor filter changes (not on click)
-    requestAnimationFrame(() => fitToVisible());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedFloor, shellGroup, rooms]);
 
   // White outline for selected room (3D or list) — no colored emissive tint
   useEffect(() => {

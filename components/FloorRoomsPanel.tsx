@@ -32,12 +32,28 @@ export default function FloorRoomsPanel({ embedded = false }: Props) {
     [floors],
   );
 
+  const floorsWithRooms = useMemo(
+    () =>
+      sortedFloors.filter((f) => rooms.some((r) => r.floorId === f.id)),
+    [sortedFloors, rooms],
+  );
+
   const floorRooms = useMemo(() => {
     if (!selectedFloor) return [];
     return rooms
       .filter((r) => r.floorId === selectedFloor)
       .sort((a, b) => a.number.localeCompare(b.number) || a.name.localeCompare(b.name));
   }, [rooms, selectedFloor]);
+
+  // Drop selection if the current floor has no rooms (hidden from options)
+  useEffect(() => {
+    if (
+      selectedFloor &&
+      !floorsWithRooms.some((f) => f.id === selectedFloor)
+    ) {
+      setSelectedFloor(null);
+    }
+  }, [selectedFloor, floorsWithRooms, setSelectedFloor]);
 
   const selectedFloorObj = sortedFloors.find((f) => f.id === selectedFloor);
 
@@ -74,10 +90,10 @@ export default function FloorRoomsPanel({ embedded = false }: Props) {
           onChange={(e) =>
             setSelectedFloor(e.target.value === "" ? null : e.target.value)
           }
-          disabled={floors.length === 0}
+          disabled={floorsWithRooms.length === 0}
         >
           <option value="">All floors — pick one for plan</option>
-          {sortedFloors.map((f) => {
+          {floorsWithRooms.map((f) => {
             const count = rooms.filter((r) => r.floorId === f.id).length;
             return (
               <option key={f.id} value={f.id}>

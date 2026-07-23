@@ -27,7 +27,11 @@ function lerpRgb(a: RGB, b: RGB, t: number): RGB {
 
 export type ColorStop = { value: number; color: string };
 
-export type ColorPaletteId = "standard" | "softPastel" | "warmPastel";
+export type ColorPaletteId =
+  | "standard"
+  | "softPastel"
+  | "warmPastel"
+  | "dark";
 
 export type ColorPalette = {
   id: ColorPaletteId;
@@ -99,6 +103,27 @@ const WARM_TEMP: ColorStop[] = [
   { value: 24, color: "#E89078" },
 ];
 
+/** Dark night palette — deep blues / amber / ember. */
+const DARK_HEIZLAST: ColorStop[] = [
+  { value: Number.NEGATIVE_INFINITY, color: "#1A2740" },
+  { value: 0, color: "#2E4A7A" },
+  { value: 10, color: "#3A5F9E" },
+  { value: 20, color: "#6B7A4A" },
+  { value: 25, color: "#B8922E" },
+  { value: 30, color: "#D4A017" },
+  { value: 40, color: "#C45C1A" },
+  { value: 50, color: "#A82828" },
+  { value: Number.POSITIVE_INFINITY, color: "#5C1818" },
+];
+
+const DARK_TEMP: ColorStop[] = [
+  { value: 6, color: "#1E3A5F" },
+  { value: 15, color: "#1F5C4A" },
+  { value: 18, color: "#2E6B3A" },
+  { value: 20, color: "#8A6B14" },
+  { value: 24, color: "#A84818" },
+];
+
 export const COLOR_PALETTES: Record<ColorPaletteId, ColorPalette> = {
   standard: {
     id: "standard",
@@ -117,6 +142,12 @@ export const COLOR_PALETTES: Record<ColorPaletteId, ColorPalette> = {
     name: "Warm Pastel",
     heizlastStops: WARM_HEIZLAST,
     temperatureStops: WARM_TEMP,
+  },
+  dark: {
+    id: "dark",
+    name: "Dark",
+    heizlastStops: DARK_HEIZLAST,
+    temperatureStops: DARK_TEMP,
   },
 };
 

@@ -104,7 +104,7 @@ export default function DebugPanel() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 left-4 z-[60] rounded-2xl border border-white/40 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur"
+        className="fixed bottom-4 right-4 z-[60] rounded-2xl border border-white/40 bg-zinc-900/80 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur"
       >
         Debug
       </button>
@@ -112,7 +112,7 @@ export default function DebugPanel() {
   }
 
   return (
-    <div className="fixed bottom-4 left-4 z-[60] w-[min(420px,calc(100vw-2rem))]">
+    <div className="fixed bottom-4 right-4 z-[60] w-[min(420px,calc(100vw-2rem))]">
       <GlassPanel variant="panel" zIndex={60} wrapperClassName="overflow-hidden">
         <div className="flex items-center justify-between gap-2 border-b border-zinc-300/40 px-3 py-2">
           <p className="text-xs font-semibold tracking-wide text-zinc-800">

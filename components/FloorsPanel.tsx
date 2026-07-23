@@ -96,6 +96,21 @@ export default function FloorsPanel({ viewerRef }: Props) {
     [floors],
   );
 
+  const floorsWithRooms = useMemo(
+    () =>
+      sortedFloors.filter((f) => rooms.some((r) => r.floorId === f.id)),
+    [sortedFloors, rooms],
+  );
+
+  useEffect(() => {
+    if (
+      selectedFloor &&
+      !floorsWithRooms.some((f) => f.id === selectedFloor)
+    ) {
+      setSelectedFloor(null);
+    }
+  }, [selectedFloor, floorsWithRooms, setSelectedFloor]);
+
   const floorRooms = useMemo(() => {
     if (!selectedFloor) return [];
     return rooms
@@ -218,14 +233,14 @@ export default function FloorsPanel({ viewerRef }: Props) {
         <p className={heading.panel}>Floors & rooms</p>
         <select
           value={selectedFloor ?? ""}
-          disabled={floors.length === 0}
+          disabled={floorsWithRooms.length === 0}
           onChange={(e) =>
             setSelectedFloor(e.target.value === "" ? null : e.target.value)
           }
           className="w-full rounded-xl border border-zinc-300/60 bg-white/50 px-3 py-2 text-sm outline-none focus:border-zinc-400"
         >
           <option value="">All floors — pick one for plan</option>
-          {sortedFloors.map((f) => {
+          {floorsWithRooms.map((f) => {
             const count = rooms.filter((r) => r.floorId === f.id).length;
             return (
               <option key={f.id} value={f.id}>
