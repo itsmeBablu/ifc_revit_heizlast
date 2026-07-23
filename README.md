@@ -1,36 +1,92 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Heizlast IFC Presentation Viewer
 
-## Getting Started
+Client-side Next.js app for presenting building heating data (Heizlast in W/m² and required room temperature in °C) from Revit-exported IFC files. Everything runs in the browser via WebAssembly — no backend, no database, no Speckle.
 
-First, run the development server:
+## Stack
+
+- Next.js (App Router) + TypeScript + Tailwind CSS
+- three.js for 3D / 2D rendering
+- web-ifc for IFC parsing (WASM)
+- @thatopen/components + @thatopen/fragments (available for fragment workflows)
+- zustand for UI / model state
+
+## Getting started
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The viewport starts empty (fullscreen grid + axes). Use **Load IFC** to open a local `.ifc` file — that is the primary load path. Registry models under `public/models/` are secondary and only fetch when you pick them in the dropdown.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Glass UI uses `@liquidglass/react` through the shared `components/GlassPanel.tsx` wrapper (retune once in `lib/designTokens.ts`).
 
-## Learn More
+## Adding IFC models
 
-To learn more about Next.js, take a look at the following resources:
+1. Place your `.ifc` file in `public/models/`, for example:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+   ```
+   public/models/building-a.ifc
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+2. Register it in `lib/modelRegistry.ts`:
 
-## Deploy on Vercel
+   ```ts
+   const MODELS: ModelEntry[] = [
+     {
+       id: "building-a",
+       label: "Building A",
+       ifcPath: "/models/building-a.ifc",
+     },
+     {
+       id: "building-b",
+       label: "Building B",
+       ifcPath: "/models/building-b.ifc",
+     },
+   ];
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+3. Restart or refresh the dev server. Select the model from the header dropdown.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+WASM binaries for web-ifc live in `public/wasm/` (copied from `node_modules/web-ifc`). If you upgrade `web-ifc`, re-copy:
+
+```bash
+copy node_modules\web-ifc\web-ifc.wasm public\wasm\
+copy node_modules\web-ifc\web-ifc-mt.wasm public\wasm\
+```
+
+## Property mapping (Revit export)
+
+Heat load and temperature are read from IFC property sets on `IfcSpace`. Preferred names are defined at the top of `lib/ifcClient.ts`:
+
+- `HEAT_LOAD_PROP_NAMES` — e.g. `Heizlast`, `HeatLoadPerArea`
+- `TEMPERATURE_PROP_NAMES` — e.g. `Temperature`, `Solltemperatur`
+
+Adjust those constants to match your Revit shared-parameter / IFC export setup.
+
+## Project layout
+
+```
+app/page.tsx                  Server Component → <ViewerAppClient />
+components/ViewerAppClient.tsx  dynamic(() => ViewerApp, { ssr: false })
+components/ViewerApp.tsx        layout + IFC load orchestration
+components/Viewer3D.tsx         perspective 3D view
+components/Plan2D.tsx           top-down orthographic plan
+lib/ifcClient.ts                WASM IFC load / parse
+lib/colorMapping.ts             Heizlast + temperature color scales
+lib/modelRegistry.ts            available models
+store/useAppStore.ts            zustand store
+public/models/                  static .ifc assets
+public/wasm/                    web-ifc WASM binaries
+```
+
+## Scripts
+
+| Command        | Description              |
+| -------------- | ------------------------ |
+| `npm run dev`  | Start development server |
+| `npm run build`| Production build         |
+| `npm run start`| Serve production build   |
+| `npm run lint` | ESLint                   |

@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #d8dde6;
+  --foreground: #18181b;
 }
 
 @theme inline {
@@ -12,15 +12,40 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background: #cfd5df;
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/*
+ * @liquidglass/react sets display:flex; align/justify center; height/width 100%.
+ * Normalize so our panels can be top-aligned, stretch, and size to content.
+ */
+.glass-surface {
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  height: auto !important;
+  width: 100% !important;
+  /* Kill sharp LiquidGlass inset/outer shadows */
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06) !important;
+  overflow: hidden !important;
+}
+
+.glass-surface--fill {
+  height: 100% !important;
+  min-height: 100%;
+}
+
+.glass-surface-content {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.duration-350 {
+  transition-duration: 350ms;
 }

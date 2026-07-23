@@ -1,7 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Ensure three.js / web-ifc / That Open packages are transpiled for the App Router.
+  transpilePackages: [
+    "three",
+    "web-ifc",
+    "@thatopen/components",
+    "@thatopen/fragments",
+  ],
 };
 
 export default nextConfig;
