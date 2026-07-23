@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BsFullscreen, BsFullscreenExit } from "react-icons/bs";
 import { VscSymbolColor } from "react-icons/vsc";
 import { HiOutlineSquare3Stack3D } from "react-icons/hi2";
 import { CiLight } from "react-icons/ci";
 import { LiaStreetViewSolid } from "react-icons/lia";
+import { LuPresentation } from "react-icons/lu";
 import type { RenderMode } from "@/lib/types";
 import { SCENE_BACKGROUND_PRESETS, useAppStore } from "@/store/useAppStore";
 import GlassPanel from "./GlassPanel";
@@ -57,6 +58,82 @@ function SliderRow({
   );
 }
 
+/** Hover popup above a toolbar control — portaled so glass/overflow can't clip it. */
+function ToolTipWrap({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint: string;
+  children: ReactNode;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ bottom: 0, left: 0 });
+
+  const updatePos = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      bottom: window.innerHeight - r.top + 12,
+      left: r.left + r.width / 2,
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    updatePos();
+    window.addEventListener("resize", updatePos);
+    window.addEventListener("scroll", updatePos, true);
+    return () => {
+      window.removeEventListener("resize", updatePos);
+      window.removeEventListener("scroll", updatePos, true);
+    };
+  }, [open]);
+
+  return (
+    <div
+      ref={wrapRef}
+      className="relative flex items-center justify-center"
+      onMouseEnter={() => {
+        updatePos();
+        setOpen(true);
+      }}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => {
+        updatePos();
+        setOpen(true);
+      }}
+      onBlur={() => setOpen(false)}
+    >
+      {children}
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            role="tooltip"
+            className="pointer-events-none fixed z-[200] w-max max-w-[240px] -translate-x-1/2"
+            style={{ bottom: pos.bottom, left: pos.left }}
+          >
+            <GlassPanel variant="control" zIndex={200}>
+              <div className="px-3.5 py-2.5 text-center">
+                <p className="text-[12px] font-semibold tracking-wide text-zinc-900">
+                  {label}
+                </p>
+                <p className="mt-1 text-[11px] leading-snug text-zinc-600">
+                  {hint}
+                </p>
+              </div>
+            </GlassPanel>
+          </div>,
+          (document.fullscreenElement as HTMLElement | null) ?? document.body,
+        )}
+    </div>
+  );
+}
+
 export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const renderMode = useAppStore((s) => s.renderMode);
   const setRenderMode = useAppStore((s) => s.setRenderMode);
@@ -66,6 +143,8 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const setSceneBackground = useAppStore((s) => s.setSceneBackground);
   const addSavedView = useAppStore((s) => s.addSavedView);
   const activeModelId = useAppStore((s) => s.activeModelId);
+  const isPresentationView = useAppStore((s) => s.isPresentationView);
+  const setPresentationView = useAppStore((s) => s.setPresentationView);
 
   const [panel, setPanel] = useState<Panel>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -82,7 +161,14 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const saveMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    const onFs = () => {
+      const fs = Boolean(document.fullscreenElement);
+      setIsFullscreen(fs);
+      // Presentation must stay fullscreen — leaving FS exits presentation
+      if (!fs && useAppStore.getState().isPresentationView) {
+        useAppStore.getState().setPresentationView(false);
+      }
+    };
     document.addEventListener("fullscreenchange", onFs);
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
@@ -169,6 +255,21 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
     }
   };
 
+  const togglePresentation = async () => {
+    const next = !isPresentationView;
+    setPresentationView(next);
+    const el = targetRef.current ?? document.documentElement;
+    try {
+      if (next) {
+        if (!document.fullscreenElement) await el.requestFullscreen();
+      } else if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // ignore — presentation still toggles without FS if browser blocks it
+    }
+  };
+
   const commitSaveView = () => {
     const name = viewName.trim();
     if (!name || !viewerRef.current) return;
@@ -179,7 +280,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   };
 
   const btn =
-    "flex h-10 w-10 items-center justify-center rounded-2xl text-zinc-700 transition-colors hover:bg-white/40 active:scale-95";
+    "flex h-10 w-10 items-center justify-center rounded-2xl text-zinc-700 transition-all duration-200 hover:bg-white/45 active:scale-95";
 
   const glassPopover =
     "fixed z-[80] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/40 bg-white/70 shadow-lg backdrop-blur-xl";
@@ -333,73 +434,132 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
           zIndex={40}
           wrapperClassName="pointer-events-auto"
         >
-          <div className="flex items-center gap-1 px-2 py-1.5">
-            <button
-              type="button"
-              className={btn}
-              aria-label="Fit model to screen"
-              title="Fit model"
-              onClick={() => viewerRef.current?.fitVisible()}
+          <div className="flex items-center gap-1.5 px-2.5 py-2">
+            <ToolTipWrap
+              label="Fit model"
+              hint="Zoom so the whole building fits on screen"
             >
-              <HiOutlineSquare3Stack3D className="h-5 w-5" />
-            </button>
+              <button
+                type="button"
+                className={btn}
+                aria-label="Fit model to screen"
+                onClick={() => viewerRef.current?.fitVisible()}
+              >
+                <HiOutlineSquare3Stack3D className="h-5 w-5" />
+              </button>
+            </ToolTipWrap>
 
-            <button
-              ref={shadeBtnRef}
-              type="button"
-              className={`${btn} ${panel === "shade" ? "bg-white/40" : ""}`}
-              aria-label="Shading mode"
-              title="Shading mode"
-              aria-expanded={panel === "shade"}
-              onClick={() =>
-                setPanel((p) => (p === "shade" ? null : "shade"))
+            <ToolTipWrap
+              label="Shading"
+              hint="Change how the building looks — colors, wireframe, and more"
+            >
+              <button
+                ref={shadeBtnRef}
+                type="button"
+                className={`${btn} ${panel === "shade" ? "bg-white/45" : ""}`}
+                aria-label="Shading mode"
+                aria-expanded={panel === "shade"}
+                onClick={() =>
+                  setPanel((p) => (p === "shade" ? null : "shade"))
+                }
+              >
+                <VscSymbolColor className="h-5 w-5" />
+              </button>
+            </ToolTipWrap>
+
+            <ToolTipWrap
+              label="Lighting"
+              hint="Adjust brightness, shadows, and the 3D background"
+            >
+              <button
+                ref={lightBtnRef}
+                type="button"
+                className={`${btn} ${panel === "light" ? "bg-white/45" : ""}`}
+                aria-label="Lighting"
+                aria-expanded={panel === "light"}
+                onClick={() =>
+                  setPanel((p) => (p === "light" ? null : "light"))
+                }
+              >
+                <CiLight className="h-5 w-5" />
+              </button>
+            </ToolTipWrap>
+
+            <ToolTipWrap
+              label="Save view"
+              hint="Save this camera angle so you can come back to it later"
+            >
+              <button
+                ref={saveBtnRef}
+                type="button"
+                className={`${btn} ${panel === "save" ? "bg-white/45" : ""}`}
+                aria-label="Save view"
+                aria-expanded={panel === "save"}
+                onClick={() => {
+                  setViewName("");
+                  setPanel((p) => (p === "save" ? null : "save"));
+                }}
+              >
+                <LiaStreetViewSolid className="h-5 w-5" />
+              </button>
+            </ToolTipWrap>
+
+            <ToolTipWrap
+              label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              hint={
+                isFullscreen
+                  ? "Leave fullscreen and show the normal window"
+                  : "Fill the whole screen with the 3D view"
               }
             >
-              <VscSymbolColor className="h-5 w-5" />
-            </button>
+              <button
+                type="button"
+                className={btn}
+                aria-label={
+                  isFullscreen ? "Exit fullscreen" : "Enter fullscreen"
+                }
+                onClick={() => void toggleFullscreen()}
+              >
+                {isFullscreen ? (
+                  <BsFullscreenExit className="h-[18px] w-[18px]" />
+                ) : (
+                  <BsFullscreen className="h-[18px] w-[18px]" />
+                )}
+              </button>
+            </ToolTipWrap>
 
-            <button
-              ref={lightBtnRef}
-              type="button"
-              className={`${btn} ${panel === "light" ? "bg-white/40" : ""}`}
-              aria-label="Lighting"
-              title="Lighting"
-              aria-expanded={panel === "light"}
-              onClick={() =>
-                setPanel((p) => (p === "light" ? null : "light"))
+            <div className="mx-0.5 h-6 w-px bg-zinc-300/60" aria-hidden />
+
+            <ToolTipWrap
+              label={
+                isPresentationView
+                  ? "Back to normal view"
+                  : "Presentation view"
+              }
+              hint={
+                isPresentationView
+                  ? "Leave fullscreen and stack floors back together"
+                  : "Fullscreen with floors spread apart so every level is visible"
               }
             >
-              <CiLight className="h-5 w-5" />
-            </button>
-
-            <button
-              ref={saveBtnRef}
-              type="button"
-              className={`${btn} ${panel === "save" ? "bg-white/40" : ""}`}
-              aria-label="Save view"
-              title="Save view"
-              aria-expanded={panel === "save"}
-              onClick={() => {
-                setViewName("");
-                setPanel((p) => (p === "save" ? null : "save"));
-              }}
-            >
-              <LiaStreetViewSolid className="h-5 w-5" />
-            </button>
-
-            <button
-              type="button"
-              className={btn}
-              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-              title="Fullscreen"
-              onClick={() => void toggleFullscreen()}
-            >
-              {isFullscreen ? (
-                <BsFullscreenExit className="h-[18px] w-[18px]" />
-              ) : (
-                <BsFullscreen className="h-[18px] w-[18px]" />
-              )}
-            </button>
+              <button
+                type="button"
+                className={`flex h-10 w-10 items-center justify-center rounded-2xl p-2 transition-all duration-300 active:scale-95 ${
+                  isPresentationView
+                    ? "bg-gradient-to-br from-sky-500 to-sky-700 text-white shadow-[0_4px_14px_rgba(14,165,233,0.35)] ring-2 ring-sky-300/50"
+                    : "text-zinc-700 hover:bg-white/45"
+                }`}
+                aria-label={
+                  isPresentationView
+                    ? "Exit presentation view"
+                    : "Presentation view"
+                }
+                aria-pressed={isPresentationView}
+                onClick={() => void togglePresentation()}
+              >
+                <LuPresentation className="h-5 w-5" />
+              </button>
+            </ToolTipWrap>
           </div>
         </GlassPanel>
       </div>

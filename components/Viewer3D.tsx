@@ -16,6 +16,7 @@ import { debugLog } from "@/lib/debugLog";
 import { ViewCube } from "@/lib/viewCube";
 import {
   ClipSliceController,
+  EXPLODE_GAP_FACTOR,
   floorWorldYBounds,
 } from "@/lib/clipSlice";
 import type { RenderMode, Room } from "@/lib/types";
@@ -268,6 +269,12 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const materialCacheRef = useRef(createOverlayMaterialCache());
   const raycaster = useRef(new THREE.Raycaster());
   const pointerNdc = useRef(new THREE.Vector2());
+  const presentationCamRef = useRef<{
+    position: [number, number, number];
+    target: [number, number, number];
+  } | null>(null);
+  const explodeAnimRef = useRef<number>(0);
+  const wasPresentationRef = useRef(false);
 
   const { shellGroup, rooms } = useModelScene();
   const colorMode = useAppStore((s) => s.colorMode);
@@ -276,6 +283,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const lighting = useAppStore((s) => s.lighting);
   const sceneBackground = useAppStore((s) => s.sceneBackground);
   const selectedFloor = useAppStore((s) => s.selectedFloor);
+  const isPresentationView = useAppStore((s) => s.isPresentationView);
   const sliceProgress = useAppStore((s) => s.sliceProgress);
   const floors = useAppStore((s) => s.floors);
   const selectedRoomId = useAppStore((s) => s.selectedRoomId);
@@ -658,9 +666,13 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     scene.background = new THREE.Color(sceneBackground);
   }, [sceneBackground]);
 
-  // Single slice path: isolate floor → clip → rebuild colored caps → set height
+  // Single slice path (basic view only) — skipped in Presentation View
   useEffect(() => {
     const clip = clipRef.current;
+
+    if (isPresentationView) {
+      return;
+    }
 
     const applyFloorVisibility = (obj: THREE.Object3D) => {
       const floorId = obj.userData.floorId as string | undefined;
@@ -677,6 +689,8 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     overlaysRef.current?.children.forEach((child) => applyFloorVisibility(child));
 
     if (!clip) return;
+
+    clip.setOrientation("horizontal");
 
     if (!selectedFloor) {
       clip.clear();
@@ -718,7 +732,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
 
     debugLog(
       "Viewer3D",
-      `rebuildSliceCaps floor=${selectedFloor} n=${floorMeshes.length} y=${heightY.toFixed(2)} mode=${colorMode} pal=${activeColorPalette}`,
+      `rebuildSliceCaps floor=${selectedFloor} n=${floorMeshes.length} y=${heightY.toFixed(2)}`,
       floorMeshes.length ? "ok" : "warn",
     );
 
@@ -732,10 +746,12 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     shellGroup,
     rooms,
     roomsFromStore,
+    isPresentationView,
   ]);
 
-  // Instant plane/cap height while dragging — no full rebuild
+  // Instant plane/cap height while dragging — basic view only
   useEffect(() => {
+    if (isPresentationView) return;
     const clip = clipRef.current;
     if (!clip || !selectedFloor) return;
     const bounds = floorWorldYBounds(selectedFloor, [
@@ -745,7 +761,197 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     if (!bounds) return;
     const span = Math.max(0.05, bounds.yMax - bounds.yMin);
     clip.setHeight(bounds.yMin + sliceProgress * span);
-  }, [selectedFloor, sliceProgress, floors, shellGroup, rooms]);
+  }, [selectedFloor, sliceProgress, floors, shellGroup, rooms, isPresentationView]);
+
+  // Presentation View: explode floors + vertical half-cut + iso camera
+  useEffect(() => {
+    const clip = clipRef.current;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!clip || !camera || !controls) return;
+
+    cancelAnimationFrame(explodeAnimRef.current);
+
+    const collectFloorMeshes = () => {
+      const map = new Map<string, THREE.Mesh[]>();
+      const add = (o: THREE.Object3D) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        if (o.userData.isClipStencil || o.userData.isSelectionOutline) return;
+        if (o.userData.isClipCap) return;
+        const fid = o.userData.floorId as string | undefined;
+        if (!fid) return;
+        if (!map.has(fid)) map.set(fid, []);
+        map.get(fid)!.push(o);
+      };
+      shellCloneRef.current?.traverse(add);
+      overlaysRef.current?.traverse(add);
+      return map;
+    };
+
+    const applyExplode = (t: number) => {
+      const sorted = [...floors].sort((a, b) => a.elevation - b.elevation);
+      const byFloor = collectFloorMeshes();
+
+      // Measure floor heights in world units (works for m or mm models)
+      let heightSum = 0;
+      let heightCount = 0;
+      for (const f of sorted) {
+        const box = new THREE.Box3();
+        for (const mesh of byFloor.get(f.id) ?? []) {
+          // Temporarily strip explode offset so height is true floor size
+          const off = (mesh.userData.presentationOffsetY as number) ?? 0;
+          if (off) mesh.position.y -= off;
+          box.expandByObject(mesh);
+          if (off) mesh.position.y += off;
+        }
+        if (!box.isEmpty()) {
+          heightSum += Math.max(0.01, box.max.y - box.min.y);
+          heightCount += 1;
+        }
+      }
+      const avgH = heightCount ? heightSum / heightCount : 3;
+      const gap = avgH * EXPLODE_GAP_FACTOR;
+
+      for (let i = 0; i < sorted.length; i++) {
+        const targetOffset = i * gap * t;
+        const meshes = byFloor.get(sorted[i].id) ?? [];
+        for (const mesh of meshes) {
+          const prev = (mesh.userData.presentationOffsetY as number) ?? 0;
+          mesh.position.y += targetOffset - prev;
+          mesh.userData.presentationOffsetY = targetOffset;
+        }
+      }
+      return gap;
+    };
+
+    const collectAllMeshes = () => {
+      const all: THREE.Mesh[] = [];
+      collectFloorMeshes().forEach((arr) => all.push(...arr));
+      return all;
+    };
+
+    const flyIso = (allMeshes: THREE.Mesh[]) => {
+      const box = new THREE.Box3();
+      for (const m of allMeshes) {
+        if (m.visible) box.expandByObject(m);
+      }
+      if (box.isEmpty()) return;
+      const { target } = frameBoundingBox(box, camera, 1.55);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      // High corner angle looking slightly down — full rooms readable
+      const dist = Math.max(size.length() * 1.15, size.y * 2.2, 8);
+      const topCornerDir = new THREE.Vector3(0.85, 1.55, 0.85).normalize();
+      const isoPos = center.clone().add(topCornerDir.multiplyScalar(dist));
+      void flyTo(camera, controls, isoPos, target, 900);
+    };
+
+    if (isPresentationView) {
+      const entering = !wasPresentationRef.current;
+      wasPresentationRef.current = true;
+
+      if (entering) {
+        presentationCamRef.current = {
+          position: camera.position.toArray() as [number, number, number],
+          target: controls.target.toArray() as [number, number, number],
+        };
+      }
+
+      // Full floors — no clip/cut so rooms keep normal size
+      clip.setOrientation("horizontal");
+      clip.clear();
+      clip.setEnabled(false);
+      clip.setCapsEnabled(false);
+
+      const showAll = (obj: THREE.Object3D) => {
+        if (obj instanceof THREE.Mesh && obj.userData.floorId) {
+          obj.visible = true;
+        }
+      };
+      shellCloneRef.current?.traverse(showAll);
+      overlaysRef.current?.children.forEach(showAll);
+
+      if (!entering) {
+        const gap = applyExplode(1);
+        debugLog(
+          "Viewer3D",
+          `presentation refresh n=${collectAllMeshes().length} gap=${gap.toFixed(2)}`,
+          "ok",
+        );
+        return;
+      }
+
+      const start = performance.now();
+      const duration = 700;
+      let lastGap = 0;
+      const tick = (now: number) => {
+        const e = Math.min(1, (now - start) / duration);
+        const ease = e < 0.5 ? 4 * e * e * e : 1 - Math.pow(-2 * e + 2, 3) / 2;
+        lastGap = applyExplode(ease);
+        if (e < 1) {
+          explodeAnimRef.current = requestAnimationFrame(tick);
+        } else {
+          const allMeshes = collectAllMeshes();
+          flyIso(allMeshes);
+          debugLog(
+            "Viewer3D",
+            `presentation n=${allMeshes.length} gap=${lastGap.toFixed(2)}`,
+            "ok",
+          );
+        }
+      };
+      explodeAnimRef.current = requestAnimationFrame(tick);
+    } else if (wasPresentationRef.current) {
+      wasPresentationRef.current = false;
+      clip.setOrientation("horizontal");
+      clip.clear();
+      clip.setEnabled(false);
+      clip.setCapsEnabled(false);
+
+      const start = performance.now();
+      const duration = 600;
+      const startOffsets = new Map<THREE.Mesh, number>();
+      collectFloorMeshes().forEach((arr) => {
+        for (const m of arr) {
+          startOffsets.set(m, (m.userData.presentationOffsetY as number) ?? 0);
+        }
+      });
+
+      const tick = (now: number) => {
+        const e = Math.min(1, (now - start) / duration);
+        const ease = e < 0.5 ? 4 * e * e * e : 1 - Math.pow(-2 * e + 2, 3) / 2;
+        const t = 1 - ease;
+        startOffsets.forEach((startOff, mesh) => {
+          const targetOff = startOff * t;
+          const prev = (mesh.userData.presentationOffsetY as number) ?? 0;
+          mesh.position.y += targetOff - prev;
+          mesh.userData.presentationOffsetY = targetOff;
+          if (e >= 1) delete mesh.userData.presentationOffsetY;
+        });
+        if (e < 1) {
+          explodeAnimRef.current = requestAnimationFrame(tick);
+        } else {
+          const saved = presentationCamRef.current;
+          if (saved) {
+            void flyTo(
+              camera,
+              controls,
+              new THREE.Vector3(...saved.position),
+              new THREE.Vector3(...saved.target),
+              850,
+            );
+            presentationCamRef.current = null;
+          } else {
+            requestAnimationFrame(() => fitToVisible());
+          }
+        }
+      };
+      explodeAnimRef.current = requestAnimationFrame(tick);
+    }
+
+    return () => cancelAnimationFrame(explodeAnimRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPresentationView, floors, shellGroup, rooms]);
 
   // White outline for selected room (3D or list) — no colored emissive tint
   useEffect(() => {

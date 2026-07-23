@@ -115,7 +115,10 @@ type AppState = {
   };
   /** Hex color for the 3D scene background. */
   sceneBackground: string;
-  /** 0 = floor bottom, 0.5 = mid (default), 1 = floor top. */
+  /** Presentation (exploded half-cut) vs basic imported view. */
+  isPresentationView: boolean;
+  /** selectedFloor restored when leaving presentation. */
+  presentationPrevFloor: string | null;
   sliceProgress: number;
   isLoadingModel: boolean;
   loadError: string | null;
@@ -149,6 +152,7 @@ type AppState = {
   ) => void;
   setSceneBackground: (hex: string) => void;
   setSliceProgress: (t: number) => void;
+  setPresentationView: (active: boolean) => void;
   setIsLoadingModel: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
   setLoadProgress: (progress: number, message?: string) => void;
@@ -228,6 +232,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     indirectLight: 0.45,
   },
   sceneBackground: initialBackground(),
+  isPresentationView: false,
+  presentationPrevFloor: null,
   sliceProgress: 0.5,
   isLoadingModel: false,
   loadError: null,
@@ -299,6 +305,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ sceneBackground: hex });
   },
   setSliceProgress: (t) => set({ sliceProgress: clamp01(t) }),
+  setPresentationView: (active) => {
+    const s = get();
+    if (active === s.isPresentationView) return;
+    if (active) {
+      set({
+        isPresentationView: true,
+        presentationPrevFloor: s.selectedFloor,
+        selectedFloor: null,
+      });
+    } else {
+      set({
+        isPresentationView: false,
+        selectedFloor: s.presentationPrevFloor,
+        presentationPrevFloor: null,
+      });
+    }
+  },
   setIsLoadingModel: (loading) => set({ isLoadingModel: loading }),
   setLoadError: (error) => set({ loadError: error }),
   setLoadProgress: (progress, message) =>
@@ -359,6 +382,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       hoveredRoom: null,
       selectedElement: null,
       sliceProgress: 0.5,
+      isPresentationView: false,
+      presentationPrevFloor: null,
     }),
 }));
 

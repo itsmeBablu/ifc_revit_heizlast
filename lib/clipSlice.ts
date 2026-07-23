@@ -2,10 +2,13 @@ import * as THREE from "three";
 import { debugLog } from "./debugLog";
 import type { Floor } from "./types";
 
+export type ClipOrientation = "horizontal" | "verticalZ";
+
 /**
- * Floor slice: Y-up clip plane + stencil solid caps (three.js clipping_stencil pattern).
+ * Floor slice: clipping plane + stencil solid caps.
  *
- * Plane normal (0,-1,0): clips geometry where world Y > constant.
+ * horizontal: normal (0,-1,0) — Schnitthöhe (Y cut)
+ * verticalZ:  normal (0,0,-1) — presentation half-section (Z cut)
  */
 export class ClipSliceController {
   readonly plane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
@@ -21,7 +24,8 @@ export class ClipSliceController {
   private enabled = false;
   private capsEnabled = false;
   private scene: THREE.Scene | null = null;
-  private heightY = 0;
+  private cutValue = 0;
+  private orientation: ClipOrientation = "horizontal";
   private _box = new THREE.Box3();
   private _size = new THREE.Vector3();
   private _center = new THREE.Vector3();
@@ -32,6 +36,21 @@ export class ClipSliceController {
     scene.add(this.capsGroup);
   }
 
+  setOrientation(orientation: ClipOrientation) {
+    this.orientation = orientation;
+    if (orientation === "horizontal") {
+      this.plane.normal.set(0, -1, 0);
+    } else {
+      this.plane.normal.set(0, 0, -1);
+    }
+    this.plane.constant = this.cutValue;
+    if (this.enabled && this.capsEnabled) this.buildCaps();
+  }
+
+  getOrientation() {
+    return this.orientation;
+  }
+
   setMeshes(meshes: THREE.Mesh[]) {
     this.clearCaps();
     this.clearPlanesFromTracked();
@@ -40,7 +59,7 @@ export class ClipSliceController {
     if (this.capsEnabled && this.enabled) this.buildCaps();
     debugLog(
       "ClipSlice",
-      `setMeshes n=${meshes.length} enabled=${this.enabled} y=${this.heightY.toFixed(3)}`,
+      `setMeshes n=${meshes.length} ori=${this.orientation} v=${this.cutValue.toFixed(3)}`,
       meshes.length ? "ok" : "warn",
     );
   }
@@ -60,18 +79,23 @@ export class ClipSliceController {
     this.capsGroup.visible = on && this.enabled;
   }
 
-  /** Instant — only updates plane.constant + cap Y (no scene walk). */
-  setHeight(y: number) {
-    this.heightY = y;
-    this.plane.constant = y;
+  /** Cut value: world Y (horizontal) or world Z (verticalZ). */
+  setCutValue(v: number) {
+    this.cutValue = v;
+    this.plane.constant = v;
     for (const e of this.entries) {
-      e.cap.position.y = y;
+      this.placeCap(e.cap, e.mesh);
       this.syncCapFromMesh(e);
     }
   }
 
+  /** @deprecated alias — horizontal Schnitthöhe */
+  setHeight(y: number) {
+    this.setCutValue(y);
+  }
+
   getHeight() {
-    return this.heightY;
+    return this.cutValue;
   }
 
   rebindMaterials() {
@@ -83,7 +107,6 @@ export class ClipSliceController {
     for (const e of this.entries) this.syncCapFromMesh(e);
   }
 
-  /** Force rebuild of stencil groups + colored cap planes from current meshes. */
   rebuildCaps() {
     if (this.enabled && this.capsEnabled) {
       this.buildCaps();
@@ -104,6 +127,30 @@ export class ClipSliceController {
     this.clear();
     if (this.scene) this.scene.remove(this.capsGroup);
     this.scene = null;
+  }
+
+  private placeCap(cap: THREE.Mesh, mesh: THREE.Mesh) {
+    mesh.updateWorldMatrix(true, false);
+    this._box.setFromObject(mesh);
+    if (this._box.isEmpty()) return;
+    this._box.getSize(this._size);
+    this._box.getCenter(this._center);
+
+    if (this.orientation === "horizontal") {
+      const w = Math.max(this._size.x, 0.05) * 1.05;
+      const d = Math.max(this._size.z, 0.05) * 1.05;
+      cap.geometry.dispose();
+      cap.geometry = new THREE.PlaneGeometry(w, d);
+      cap.rotation.set(-Math.PI / 2, 0, 0);
+      cap.position.set(this._center.x, this.cutValue, this._center.z);
+    } else {
+      const w = Math.max(this._size.x, 0.05) * 1.05;
+      const h = Math.max(this._size.y, 0.05) * 1.05;
+      cap.geometry.dispose();
+      cap.geometry = new THREE.PlaneGeometry(w, h);
+      cap.rotation.set(0, 0, 0);
+      cap.position.set(this._center.x, this._center.y, this.cutValue);
+    }
   }
 
   private applyPlanesToTracked() {
@@ -153,8 +200,6 @@ export class ClipSliceController {
     this.clearCaps();
     let i = 1;
     for (const mesh of this.tracked) {
-      // Do not skip by mesh.visible — on floor change, isolation may not have
-      // applied yet; tracked list is already scoped to the selected floor.
       if (!mesh.geometry) continue;
 
       mesh.updateWorldMatrix(true, false);
@@ -167,8 +212,19 @@ export class ClipSliceController {
       const stencil = this.createStencilGroup(mesh.geometry, baseOrder);
       mesh.add(stencil);
 
-      const w = Math.max(this._size.x, 0.05) * 1.05;
-      const d = Math.max(this._size.z, 0.05) * 1.05;
+      let geo: THREE.PlaneGeometry;
+      if (this.orientation === "horizontal") {
+        geo = new THREE.PlaneGeometry(
+          Math.max(this._size.x, 0.05) * 1.05,
+          Math.max(this._size.z, 0.05) * 1.05,
+        );
+      } else {
+        geo = new THREE.PlaneGeometry(
+          Math.max(this._size.x, 0.05) * 1.05,
+          Math.max(this._size.y, 0.05) * 1.05,
+        );
+      }
+
       const capMat = new THREE.MeshBasicMaterial({
         side: THREE.DoubleSide,
         clippingPlanes: [],
@@ -183,9 +239,14 @@ export class ClipSliceController {
       });
       this.applySourceAppearance(capMat, mesh);
 
-      const cap = new THREE.Mesh(new THREE.PlaneGeometry(w, d), capMat);
-      cap.rotation.x = -Math.PI / 2;
-      cap.position.set(this._center.x, this.heightY, this._center.z);
+      const cap = new THREE.Mesh(geo, capMat);
+      if (this.orientation === "horizontal") {
+        cap.rotation.x = -Math.PI / 2;
+        cap.position.set(this._center.x, this.cutValue, this._center.z);
+      } else {
+        cap.rotation.set(0, 0, 0);
+        cap.position.set(this._center.x, this._center.y, this.cutValue);
+      }
       cap.renderOrder = baseOrder + 1.5;
       cap.userData.isClipCap = true;
       this.capsGroup.add(cap);
@@ -252,7 +313,6 @@ export class ClipSliceController {
     else if (src?.color) capMat.color.copy(src.color);
     else capMat.color.setHex(0xb8bec8);
 
-    // Caps read solid for a filled cut (ignore source transparency)
     capMat.transparent = false;
     capMat.opacity = 1;
     capMat.depthWrite = true;
@@ -267,7 +327,10 @@ export class ClipSliceController {
   }
 }
 
-/** World-space Y bounds of meshes belonging to a floor. */
+/** Extra vertical gap between floors in Presentation View, as a
+ *  fraction of average floor height (scale-safe for m or mm models). */
+export const EXPLODE_GAP_FACTOR = 1.1;
+
 export function floorWorldYBounds(
   floorId: string,
   roots: (THREE.Object3D | null | undefined)[],
@@ -306,4 +369,24 @@ export function floorElevationYBounds(
     yMax /= 1000;
   }
   return { yMin, yMax: Math.max(yMax, yMin + 0.05) };
+}
+
+/** World Z mid of all meshes (for vertical half-cut). */
+export function sceneWorldZMid(
+  roots: (THREE.Object3D | null | undefined)[],
+): number | null {
+  const box = new THREE.Box3();
+  let any = false;
+  for (const root of roots) {
+    if (!root) continue;
+    root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      if (o.userData.isClipStencil || o.userData.isSelectionOutline) return;
+      if (o.userData.isClipCap) return;
+      box.expandByObject(o);
+      any = true;
+    });
+  }
+  if (!any || box.isEmpty()) return null;
+  return (box.min.z + box.max.z) / 2;
 }

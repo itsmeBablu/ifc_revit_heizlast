@@ -77,6 +77,7 @@ export default function FloorsPanel({ viewerRef }: Props) {
   const rooms = useAppStore((s) => s.rooms);
   const selectedFloor = useAppStore((s) => s.selectedFloor);
   const selectedRoomId = useAppStore((s) => s.selectedRoomId);
+  const isPresentationView = useAppStore((s) => s.isPresentationView);
   const activeModelId = useAppStore((s) => s.activeModelId);
   const activeModelLabel = useAppStore((s) => s.activeModelLabel);
   const savedViews = useAppStore((s) => s.savedViews);
@@ -252,10 +253,12 @@ export default function FloorsPanel({ viewerRef }: Props) {
 
         {selectedFloor ? (
           <>
-            <FloorSliceSlider
-              floors={sortedFloors}
-              selectedFloor={selectedFloor}
-            />
+            {!isPresentationView && (
+              <FloorSliceSlider
+                floors={sortedFloors}
+                selectedFloor={selectedFloor}
+              />
+            )}
 
             <div className="overflow-hidden rounded-xl border border-zinc-300/50 bg-[#f2f4f7]">
               {snapshotUrl ? (

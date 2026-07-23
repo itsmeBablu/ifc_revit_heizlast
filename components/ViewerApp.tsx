@@ -55,6 +55,7 @@ export default function ViewerApp() {
   const activeModelLabel = useAppStore((s) => s.activeModelLabel);
   const selectedRoomId = useAppStore((s) => s.selectedRoomId);
   const hoveredRoom = useAppStore((s) => s.hoveredRoom);
+  const isPresentationView = useAppStore((s) => s.isPresentationView);
 
   const setActiveModelId = useAppStore((s) => s.setActiveModelId);
   const setFloors = useAppStore((s) => s.setFloors);
@@ -245,75 +246,75 @@ export default function ViewerApp() {
           />
         </div>
 
-        {/* Header: 50% default / 25% collapsed — outside click shrinks; bar click expands */}
+        {/* Header: 50% default / 25% collapsed */}
         <div
           data-app-header
           className={`pointer-events-none fixed top-3 left-1/2 z-40 -translate-x-1/2 transition-all duration-300 ease-out ${
             isHeaderCollapsed ? "w-[min(25%,280px)]" : "w-[50%]"
           } min-w-[220px] max-w-[720px]`}
         >
-          <GlassPanel
-            variant="panel"
-            zIndex={40}
-            wrapperClassName="pointer-events-auto"
-          >
-            <header
-              className={`flex items-center gap-2 px-3 py-1.5 transition-all duration-300 ${
-                isHeaderCollapsed ? "justify-center cursor-pointer" : "justify-between"
-              }`}
-              onClick={() => {
-                if (isHeaderCollapsed) setHeaderCollapsed(false);
-              }}
-              title={isHeaderCollapsed ? "Expand header" : undefined}
-            >
-              <div
-                className={`min-w-0 ${
-                  isHeaderCollapsed ? "text-center" : "flex-1 text-left"
-                }`}
-              >
-                <h1
-                  className={`font-semibold tracking-wide whitespace-nowrap transition-all duration-300 ${
-                    isHeaderCollapsed ? "text-xs" : "text-sm sm:text-base"
-                  }`}
-                  style={{
-                    backgroundImage: heizlastGradientCss("to right"),
-                    WebkitBackgroundClip: "text",
-                    backgroundClip: "text",
-                    color: "transparent",
-                    backgroundSize: "100% 100%",
-                  }}
-                >
-                  Heizlast Präsentation
-                </h1>
-                {activeModelLabel && (
-                  <p
-                    className={`truncate text-[10px] font-medium text-zinc-500 ${
-                      isHeaderCollapsed ? "text-center" : ""
-                    }`}
-                  >
-                    {activeModelLabel}
-                  </p>
-                )}
-              </div>
-
-              <div
-                className={`flex shrink-0 items-center gap-2 overflow-hidden transition-all duration-300 ease-out ${
+          <div className="pointer-events-auto">
+            <GlassPanel variant="panel" zIndex={40}>
+              <header
+                className={`flex items-center gap-2 px-3 py-1.5 transition-all duration-300 ${
                   isHeaderCollapsed
-                    ? "max-w-0 scale-95 opacity-0 pointer-events-none w-0"
-                    : "max-w-[420px] scale-100 opacity-100"
+                    ? "justify-center cursor-pointer"
+                    : "justify-between"
                 }`}
-                onClick={(e) => e.stopPropagation()}
+                onClick={() => {
+                  if (isHeaderCollapsed) setHeaderCollapsed(false);
+                }}
+                title={isHeaderCollapsed ? "Expand header" : undefined}
               >
-                <LoadIfcButton
-                  onFile={handleFile}
-                  disabled={isLoadingModel}
-                />
-                <ModelSelector
-                  onSelectRegistryModel={handleRegistrySelect}
-                />
-              </div>
-            </header>
-          </GlassPanel>
+                <div
+                  className={`min-w-0 ${
+                    isHeaderCollapsed ? "text-center" : "flex-1 text-left"
+                  }`}
+                >
+                  <h1
+                    className={`font-semibold tracking-wide whitespace-nowrap transition-all duration-300 ${
+                      isHeaderCollapsed ? "text-xs" : "text-sm sm:text-base"
+                    }`}
+                    style={{
+                      backgroundImage: heizlastGradientCss("to right"),
+                      WebkitBackgroundClip: "text",
+                      backgroundClip: "text",
+                      color: "transparent",
+                      backgroundSize: "100% 100%",
+                    }}
+                  >
+                    Heizlast Präsentation
+                  </h1>
+                  {activeModelLabel && (
+                    <p
+                      className={`truncate text-[10px] font-medium text-zinc-500 ${
+                        isHeaderCollapsed ? "text-center" : ""
+                      }`}
+                    >
+                      {activeModelLabel}
+                    </p>
+                  )}
+                </div>
+
+                <div
+                  className={`flex shrink-0 items-center gap-1.5 overflow-hidden transition-all duration-300 ease-out ${
+                    isHeaderCollapsed
+                      ? "max-w-0 scale-95 opacity-0 pointer-events-none w-0"
+                      : "max-w-[420px] scale-100 opacity-100"
+                  }`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <LoadIfcButton
+                    onFile={handleFile}
+                    disabled={isLoadingModel}
+                  />
+                  <ModelSelector
+                    onSelectRegistryModel={handleRegistrySelect}
+                  />
+                </div>
+              </header>
+            </GlassPanel>
+          </div>
         </div>
 
         {isLoadingModel && (
@@ -411,24 +412,24 @@ export default function ViewerApp() {
               room={room}
               opaque
               anchor={{
-                left: leftPanelOpen ? 380 : 24,
+                left: leftPanelOpen && !isPresentationView ? 380 : 24,
                 top: 120,
               }}
             />
           );
         })()}
-        <DebugPanel />
+        {!isPresentationView && <DebugPanel />}
         <ViewerToolbar viewerRef={viewerRef} targetRef={rootRef} />
 
-        {/* LEFT — Floors & Rooms */}
+        {/* LEFT — Floors & Rooms (hidden during Presentation View) */}
         {isDesktop && (
           <aside
             className={`fixed top-16 bottom-4 left-4 z-[35] flex w-[min(360px,calc(100vw-2rem))] flex-col ${motion.sidebar} ${
-              leftPanelOpen
+              leftPanelOpen && !isPresentationView
                 ? "pointer-events-auto translate-x-0 opacity-100"
                 : "pointer-events-none -translate-x-[calc(100%+1.5rem)] opacity-0"
             }`}
-            aria-hidden={!leftPanelOpen}
+            aria-hidden={!leftPanelOpen || isPresentationView}
           >
             <GlassPanel
               variant="panel"
@@ -463,7 +464,7 @@ export default function ViewerApp() {
           </aside>
         )}
 
-        {isDesktop && !leftPanelOpen && (
+        {isDesktop && !leftPanelOpen && !isPresentationView && (
           <button
             type="button"
             onClick={() => setLeftPanelOpen(true)}
@@ -633,8 +634,12 @@ export default function ViewerApp() {
                     </GlassButton>
                   </div>
                   <div className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
-                    <FloorsPanel viewerRef={viewerRef} />
-                    <div className="mx-3 border-t border-zinc-300/50" />
+                    {!isPresentationView && (
+                      <>
+                        <FloorsPanel viewerRef={viewerRef} />
+                        <div className="mx-3 border-t border-zinc-300/50" />
+                      </>
+                    )}
                     <LegendPanel />
                   </div>
                 </GlassPanel>
