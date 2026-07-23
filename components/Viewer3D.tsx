@@ -17,6 +17,7 @@ import { ViewCube } from "@/lib/viewCube";
 import {
   ClipSliceController,
   EXPLODE_GAP_FACTOR,
+  EXPLODE_LEFT_FACTOR,
   floorWorldYBounds,
 } from "@/lib/clipSlice";
 import type { RenderMode, Room } from "@/lib/types";
@@ -133,6 +134,22 @@ function attachWhiteOutline(mesh: THREE.Mesh) {
   });
   const outline = new THREE.Mesh(mesh.geometry, mat);
   outline.scale.setScalar(1.055);
+  outline.userData.isSelectionOutline = true;
+  outline.renderOrder = (mesh.renderOrder ?? 0) - 1;
+  mesh.add(outline);
+}
+
+/** Thick colored outline for presentation room highlight (no camera zoom). */
+function attachColorOutline(mesh: THREE.Mesh, hex: string) {
+  clearSelectionOutlines(mesh);
+  const mat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(hex),
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: true,
+  });
+  const outline = new THREE.Mesh(mesh.geometry, mat);
+  outline.scale.setScalar(1.12);
   outline.userData.isSelectionOutline = true;
   outline.renderOrder = (mesh.renderOrder ?? 0) - 1;
   mesh.add(outline);
@@ -792,17 +809,23 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       const sorted = [...floors].sort((a, b) => a.elevation - b.elevation);
       const byFloor = collectFloorMeshes();
 
-      // Measure floor heights in world units (works for m or mm models)
+      // Measure floor heights + plan width in world units (strip offsets first)
       let heightSum = 0;
       let heightCount = 0;
+      const planBox = new THREE.Box3();
+      let anyMesh = false;
       for (const f of sorted) {
         const box = new THREE.Box3();
         for (const mesh of byFloor.get(f.id) ?? []) {
-          // Temporarily strip explode offset so height is true floor size
-          const off = (mesh.userData.presentationOffsetY as number) ?? 0;
-          if (off) mesh.position.y -= off;
+          const offY = (mesh.userData.presentationOffsetY as number) ?? 0;
+          const offX = (mesh.userData.presentationOffsetX as number) ?? 0;
+          if (offY) mesh.position.y -= offY;
+          if (offX) mesh.position.x -= offX;
           box.expandByObject(mesh);
-          if (off) mesh.position.y += off;
+          planBox.expandByObject(mesh);
+          anyMesh = true;
+          if (offY) mesh.position.y += offY;
+          if (offX) mesh.position.x += offX;
         }
         if (!box.isEmpty()) {
           heightSum += Math.max(0.01, box.max.y - box.min.y);
@@ -811,14 +834,22 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       }
       const avgH = heightCount ? heightSum / heightCount : 3;
       const gap = avgH * EXPLODE_GAP_FACTOR;
+      const widthX = anyMesh && !planBox.isEmpty()
+        ? Math.max(planBox.max.x - planBox.min.x, 0.01)
+        : avgH * 4;
+      const leftShift = -widthX * EXPLODE_LEFT_FACTOR;
 
       for (let i = 0; i < sorted.length; i++) {
-        const targetOffset = i * gap * t;
+        const targetY = i * gap * t;
+        const targetX = leftShift * t;
         const meshes = byFloor.get(sorted[i].id) ?? [];
         for (const mesh of meshes) {
-          const prev = (mesh.userData.presentationOffsetY as number) ?? 0;
-          mesh.position.y += targetOffset - prev;
-          mesh.userData.presentationOffsetY = targetOffset;
+          const prevY = (mesh.userData.presentationOffsetY as number) ?? 0;
+          const prevX = (mesh.userData.presentationOffsetX as number) ?? 0;
+          mesh.position.y += targetY - prevY;
+          mesh.position.x += targetX - prevX;
+          mesh.userData.presentationOffsetY = targetY;
+          mesh.userData.presentationOffsetX = targetX;
         }
       }
       return gap;
@@ -839,10 +870,15 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       const { target } = frameBoundingBox(box, camera, 1.55);
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
-      // High corner angle looking slightly down — full rooms readable
-      const dist = Math.max(size.length() * 1.15, size.y * 2.2, 8);
-      const topCornerDir = new THREE.Vector3(0.85, 1.55, 0.85).normalize();
-      const isoPos = center.clone().add(topCornerDir.multiplyScalar(dist));
+      // Top-corner view pitched ~15° down toward the building
+      const elev = (15 * Math.PI) / 180;
+      const dist = Math.max(size.length() * 1.25, size.y * 2.4, size.x * 1.4, 8);
+      const dir = new THREE.Vector3(
+        Math.cos(elev),
+        Math.sin(elev),
+        Math.cos(elev),
+      ).normalize();
+      const isoPos = center.clone().add(dir.multiplyScalar(dist));
       void flyTo(camera, controls, isoPos, target, 900);
     };
 
@@ -910,10 +946,16 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
 
       const start = performance.now();
       const duration = 600;
-      const startOffsets = new Map<THREE.Mesh, number>();
+      const startOffsets = new Map<
+        THREE.Mesh,
+        { y: number; x: number }
+      >();
       collectFloorMeshes().forEach((arr) => {
         for (const m of arr) {
-          startOffsets.set(m, (m.userData.presentationOffsetY as number) ?? 0);
+          startOffsets.set(m, {
+            y: (m.userData.presentationOffsetY as number) ?? 0,
+            x: (m.userData.presentationOffsetX as number) ?? 0,
+          });
         }
       });
 
@@ -922,11 +964,18 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
         const ease = e < 0.5 ? 4 * e * e * e : 1 - Math.pow(-2 * e + 2, 3) / 2;
         const t = 1 - ease;
         startOffsets.forEach((startOff, mesh) => {
-          const targetOff = startOff * t;
-          const prev = (mesh.userData.presentationOffsetY as number) ?? 0;
-          mesh.position.y += targetOff - prev;
-          mesh.userData.presentationOffsetY = targetOff;
-          if (e >= 1) delete mesh.userData.presentationOffsetY;
+          const targetY = startOff.y * t;
+          const targetX = startOff.x * t;
+          const prevY = (mesh.userData.presentationOffsetY as number) ?? 0;
+          const prevX = (mesh.userData.presentationOffsetX as number) ?? 0;
+          mesh.position.y += targetY - prevY;
+          mesh.position.x += targetX - prevX;
+          mesh.userData.presentationOffsetY = targetY;
+          mesh.userData.presentationOffsetX = targetX;
+          if (e >= 1) {
+            delete mesh.userData.presentationOffsetY;
+            delete mesh.userData.presentationOffsetX;
+          }
         });
         if (e < 1) {
           explodeAnimRef.current = requestAnimationFrame(tick);
@@ -953,11 +1002,13 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPresentationView, floors, shellGroup, rooms]);
 
-  // White outline for selected room (3D or list) — no colored emissive tint
+  // Outline for selected room (3D or list) — no camera zoom
   useEffect(() => {
     const baseOpacity = useAppStore.getState().lighting.transparency;
     const selectedExpress = selectedElement?.expressId ?? null;
     const lightMode = useAppStore.getState().renderMode === "light";
+    const presentation = useAppStore.getState().isPresentationView;
+    const palette = useAppStore.getState().activeColorPalette;
 
     for (const [id, mesh] of roomMeshById.current) {
       clearSelectionOutlines(mesh);
@@ -969,7 +1020,21 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
         mat.emissive.setHex(0x000000);
         mat.emissiveIntensity = 0;
       }
-      if (isSel) attachWhiteOutline(mesh);
+      if (isSel) {
+        if (presentation) {
+          const hex =
+            (mesh.userData.colorHex as string | undefined) ??
+            (mesh.userData.baseColorHex as string | undefined) ??
+            `#${mat.color.getHexString()}`;
+          attachColorOutline(mesh, hex);
+          if (!lightMode) {
+            mat.emissive.set(hex);
+            mat.emissiveIntensity = 0.35;
+          }
+        } else {
+          attachWhiteOutline(mesh);
+        }
+      }
       mat.needsUpdate = true;
     }
 
@@ -980,10 +1045,27 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       const isSel = obj.userData.expressId === selectedExpress;
       mat.emissive.setHex(0x000000);
       mat.emissiveIntensity = 0;
-      if (isSel) attachWhiteOutline(obj);
+      if (isSel) {
+        if (presentation) {
+          const hex =
+            (obj.userData.colorHex as string | undefined) ??
+            `#${mat.color.getHexString()}`;
+          attachColorOutline(obj, hex);
+        } else {
+          attachWhiteOutline(obj);
+        }
+      }
       mat.needsUpdate = true;
     });
-  }, [selectedRoomId, selectedElement, lighting.transparency]);
+    // palette unused except for future; keep presentation/selection in sync
+    void palette;
+  }, [
+    selectedRoomId,
+    selectedElement,
+    lighting.transparency,
+    isPresentationView,
+    activeColorPalette,
+  ]);
 
   // Pointer: select only — no camera flyTo
   useEffect(() => {

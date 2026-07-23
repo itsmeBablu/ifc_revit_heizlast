@@ -329,7 +329,10 @@ export class ClipSliceController {
 
 /** Extra vertical gap between floors in Presentation View, as a
  *  fraction of average floor height (scale-safe for m or mm models). */
-export const EXPLODE_GAP_FACTOR = 1.1;
+export const EXPLODE_GAP_FACTOR = 2.25;
+
+/** Shift the whole exploded stack left by this fraction of building width. */
+export const EXPLODE_LEFT_FACTOR = 0.5;
 
 export function floorWorldYBounds(
   floorId: string,

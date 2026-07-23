@@ -101,18 +101,18 @@ export default function LegendPanel() {
               type="button"
               title="Change color palette"
               onClick={() => setPaletteOpen((v) => !v)}
-              className="flex w-full flex-wrap gap-1.5 rounded-xl p-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"
+              className="flex w-full flex-nowrap items-center justify-between gap-0.5 rounded-xl p-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"
             >
               {tempStops.map((s) => (
                 <div
                   key={s.value}
-                  className="flex items-center gap-1 rounded-lg bg-white/50 px-2 py-1 text-[10px] font-medium text-zinc-700"
+                  className="flex min-w-0 flex-1 items-center justify-center gap-0.5 rounded-lg bg-white/50 px-1 py-1 text-[9px] font-medium tabular-nums text-zinc-700"
                 >
                   <span
-                    className="inline-block h-2.5 w-2.5 rounded-md"
+                    className="inline-block h-2 w-2 shrink-0 rounded-sm"
                     style={{ backgroundColor: s.color }}
                   />
-                  {s.value}°C
+                  <span className="truncate">{s.value}°</span>
                 </div>
               ))}
             </button>

@@ -115,10 +115,12 @@ type AppState = {
   };
   /** Hex color for the 3D scene background. */
   sceneBackground: string;
-  /** Presentation (exploded half-cut) vs basic imported view. */
+  /** Presentation (exploded) vs basic imported view. */
   isPresentationView: boolean;
   /** selectedFloor restored when leaving presentation. */
   presentationPrevFloor: string | null;
+  /** Floor focused in the presentation rooms list (does not isolate 3D). */
+  presentationFloorId: string | null;
   sliceProgress: number;
   isLoadingModel: boolean;
   loadError: string | null;
@@ -153,6 +155,7 @@ type AppState = {
   setSceneBackground: (hex: string) => void;
   setSliceProgress: (t: number) => void;
   setPresentationView: (active: boolean) => void;
+  setPresentationFloorId: (floorId: string | null) => void;
   setIsLoadingModel: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
   setLoadProgress: (progress: number, message?: string) => void;
@@ -234,6 +237,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sceneBackground: initialBackground(),
   isPresentationView: false,
   presentationPrevFloor: null,
+  presentationFloorId: null,
   sliceProgress: 0.5,
   isLoadingModel: false,
   loadError: null,
@@ -309,19 +313,41 @@ export const useAppStore = create<AppState>((set, get) => ({
     const s = get();
     if (active === s.isPresentationView) return;
     if (active) {
+      const floorsWithRooms = s.floors.filter((f) =>
+        s.rooms.some((r) => r.floorId === f.id),
+      );
+      const pool = floorsWithRooms.length ? floorsWithRooms : s.floors;
+      const erd = pool.find((f) =>
+        /erdgeschoss|\beg\b|ground\s*floor|egeschoss/i.test(f.name),
+      );
+      const defaultFloor = erd?.id ?? pool[0]?.id ?? null;
       set({
         isPresentationView: true,
         presentationPrevFloor: s.selectedFloor,
         selectedFloor: null,
+        presentationFloorId: defaultFloor,
+        selectedRoomId: null,
+        selectedElement: null,
+        rightPanelOpen: true,
+        sidebarOpen: true,
       });
     } else {
       set({
         isPresentationView: false,
         selectedFloor: s.presentationPrevFloor,
         presentationPrevFloor: null,
+        presentationFloorId: null,
+        selectedRoomId: null,
+        selectedElement: null,
       });
     }
   },
+  setPresentationFloorId: (floorId) =>
+    set({
+      presentationFloorId: floorId,
+      selectedRoomId: null,
+      selectedElement: null,
+    }),
   setIsLoadingModel: (loading) => set({ isLoadingModel: loading }),
   setLoadError: (error) => set({ loadError: error }),
   setLoadProgress: (progress, message) =>
@@ -384,6 +410,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       sliceProgress: 0.5,
       isPresentationView: false,
       presentationPrevFloor: null,
+      presentationFloorId: null,
     }),
 }));
 

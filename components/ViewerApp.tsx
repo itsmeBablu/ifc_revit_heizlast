@@ -24,6 +24,7 @@ import ModelSelector from "./ModelSelector";
 import LoadIfcButton from "./LoadIfcButton";
 import FloorsPanel from "./FloorsPanel";
 import LegendPanel from "./LegendPanel";
+import PresentationFloorPanel from "./PresentationFloorPanel";
 import DebugPanel from "./DebugPanel";
 import GlassPanel from "./GlassPanel";
 import { GlassButton, IconAlert } from "./ui";
@@ -489,10 +490,10 @@ export default function ViewerApp() {
           </button>
         )}
 
-        {/* RIGHT — Legend (content-sized, below ViewCube) */}
+        {/* RIGHT — Legend (+ presentation floor rooms) */}
         {isDesktop && (
           <aside
-            className={`fixed top-36 right-4 z-[35] flex w-[min(280px,calc(100vw-2rem))] flex-col ${motion.sidebar} ${
+            className={`fixed top-36 right-4 bottom-20 z-[35] flex w-[min(280px,calc(100vw-2rem))] flex-col gap-3 overflow-hidden pb-1 ${motion.sidebar} ${
               rightPanelOpen
                 ? "pointer-events-auto translate-x-0 opacity-100"
                 : "pointer-events-none translate-x-[calc(100%+1.5rem)] opacity-0"
@@ -502,7 +503,7 @@ export default function ViewerApp() {
             <GlassPanel
               variant="panel"
               zIndex={35}
-              wrapperClassName="relative overflow-hidden"
+              wrapperClassName="relative shrink-0 overflow-hidden"
             >
               <button
                 type="button"
@@ -528,6 +529,19 @@ export default function ViewerApp() {
                 <LegendPanel />
               </div>
             </GlassPanel>
+
+            {isPresentationView && (
+              <GlassPanel
+                variant="panel"
+                zIndex={35}
+                fill
+                wrapperClassName="relative mb-2 flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
+                <div className="flex h-full min-h-0 flex-1 flex-col pl-1">
+                  <PresentationFloorPanel />
+                </div>
+              </GlassPanel>
+            )}
           </aside>
         )}
 
@@ -641,6 +655,12 @@ export default function ViewerApp() {
                       </>
                     )}
                     <LegendPanel />
+                    {isPresentationView && (
+                      <>
+                        <div className="mx-3 border-t border-zinc-300/50" />
+                        <PresentationFloorPanel />
+                      </>
+                    )}
                   </div>
                 </GlassPanel>
               </div>
