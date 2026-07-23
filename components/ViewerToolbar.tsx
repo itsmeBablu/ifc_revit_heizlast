@@ -6,9 +6,11 @@ import { BsFullscreen, BsFullscreenExit } from "react-icons/bs";
 import { VscSymbolColor } from "react-icons/vsc";
 import { HiOutlineSquare3Stack3D } from "react-icons/hi2";
 import { CiLight } from "react-icons/ci";
+import { LiaStreetViewSolid } from "react-icons/lia";
 import type { RenderMode } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
 import GlassPanel from "./GlassPanel";
+import Slider from "./ui/Slider";
 import type { Viewer3DHandle } from "./Viewer3D";
 import type { RefObject } from "react";
 
@@ -25,7 +27,7 @@ type Props = {
   targetRef: RefObject<HTMLElement | null>;
 };
 
-type Panel = "shade" | "light" | null;
+type Panel = "shade" | "light" | "save" | null;
 
 function SliderRow({
   label,
@@ -44,13 +46,12 @@ function SliderRow({
           {Math.round(value * 100)}%
         </span>
       </div>
-      <input
-        type="range"
+      <Slider
         min={0}
         max={100}
+        step={1}
         value={Math.round(value * 100)}
-        onChange={(e) => onChange(Number(e.target.value) / 100)}
-        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-300/70 accent-zinc-800"
+        onChange={(v) => onChange(v / 100)}
       />
     </label>
   );
@@ -61,16 +62,22 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const setRenderMode = useAppStore((s) => s.setRenderMode);
   const lighting = useAppStore((s) => s.lighting);
   const setLighting = useAppStore((s) => s.setLighting);
+  const addSavedView = useAppStore((s) => s.addSavedView);
+  const activeModelId = useAppStore((s) => s.activeModelId);
 
   const [panel, setPanel] = useState<Panel>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [shadePos, setShadePos] = useState({ bottom: 0, left: 0 });
   const [lightPos, setLightPos] = useState({ bottom: 0, left: 0 });
+  const [savePos, setSavePos] = useState({ bottom: 0, left: 0 });
+  const [viewName, setViewName] = useState("");
 
   const shadeBtnRef = useRef<HTMLButtonElement>(null);
   const lightBtnRef = useRef<HTMLButtonElement>(null);
+  const saveBtnRef = useRef<HTMLButtonElement>(null);
   const shadeMenuRef = useRef<HTMLDivElement>(null);
   const lightMenuRef = useRef<HTMLDivElement>(null);
+  const saveMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -106,6 +113,20 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
     return () => window.removeEventListener("resize", update);
   }, [panel]);
 
+  useLayoutEffect(() => {
+    if (panel !== "save" || !saveBtnRef.current) return;
+    const update = () => {
+      const r = saveBtnRef.current!.getBoundingClientRect();
+      setSavePos({
+        bottom: window.innerHeight - r.top + 10,
+        left: r.left + r.width / 2,
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [panel]);
+
   useEffect(() => {
     if (!panel) return;
     const onDoc = (e: MouseEvent) => {
@@ -117,6 +138,10 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
       if (panel === "light") {
         if (lightMenuRef.current?.contains(t)) return;
         if (lightBtnRef.current?.contains(t)) return;
+      }
+      if (panel === "save") {
+        if (saveMenuRef.current?.contains(t)) return;
+        if (saveBtnRef.current?.contains(t)) return;
       }
       setPanel(null);
     };
@@ -140,6 +165,15 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
     } catch {
       // ignore
     }
+  };
+
+  const commitSaveView = () => {
+    const name = viewName.trim();
+    if (!name || !viewerRef.current) return;
+    const pose = viewerRef.current.getCameraPose();
+    addSavedView(name, pose.position, pose.target);
+    setViewName("");
+    setPanel(null);
   };
 
   const btn =
@@ -218,6 +252,44 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
       document.body,
     );
 
+  const saveMenu =
+    panel === "save" &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <div
+        ref={saveMenuRef}
+        className={`${glassPopover} w-56 p-2.5`}
+        style={{ bottom: savePos.bottom, left: savePos.left }}
+        role="dialog"
+        aria-label="Save view"
+      >
+        <p className="mb-1.5 px-0.5 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+          Save view
+        </p>
+        <input
+          autoFocus
+          type="text"
+          value={viewName}
+          onChange={(e) => setViewName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitSaveView();
+            if (e.key === "Escape") setPanel(null);
+          }}
+          placeholder="View name"
+          className="mb-2 w-full rounded-xl border border-zinc-300/60 bg-white/70 px-2.5 py-1.5 text-xs outline-none focus:border-zinc-400"
+        />
+        <button
+          type="button"
+          disabled={!viewName.trim() || !activeModelId}
+          onClick={commitSaveView}
+          className="w-full rounded-xl bg-zinc-800 px-2 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+        >
+          Save
+        </button>
+      </div>,
+      document.body,
+    );
+
   return (
     <>
       <div className="pointer-events-none fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
@@ -266,6 +338,21 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
             </button>
 
             <button
+              ref={saveBtnRef}
+              type="button"
+              className={`${btn} ${panel === "save" ? "bg-white/40" : ""}`}
+              aria-label="Save view"
+              title="Save view"
+              aria-expanded={panel === "save"}
+              onClick={() => {
+                setViewName("");
+                setPanel((p) => (p === "save" ? null : "save"));
+              }}
+            >
+              <LiaStreetViewSolid className="h-5 w-5" />
+            </button>
+
+            <button
               type="button"
               className={btn}
               aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
@@ -283,6 +370,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
       </div>
       {shadeMenu}
       {lightMenu}
+      {saveMenu}
     </>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import type { ColorPaletteId } from "@/lib/colorMapping";
 import type {
   ColorMode,
   Floor,
@@ -11,7 +12,9 @@ import type {
 } from "@/lib/types";
 
 const LAST_MODEL_KEY = "ifc-viewer:lastModelId";
-const SIDEBAR_KEY = "ifc-viewer:sidebarOpen";
+const LEFT_PANEL_KEY = "ifc-viewer:leftPanelOpen";
+const RIGHT_PANEL_KEY = "ifc-viewer:rightPanelOpen";
+const PALETTE_KEY = "ifc-viewer:colorPalette";
 const savedViewsKey = (modelId: string) => `ifc-viewer:savedViews:${modelId}`;
 
 function clamp01(n: number): number {
@@ -59,15 +62,20 @@ export function persistModelId(modelId: string): void {
   }
 }
 
-export function getPersistedSidebarOpen(): boolean {
-  if (typeof window === "undefined") return false;
+function readBool(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") return fallback;
   try {
-    const raw = localStorage.getItem(SIDEBAR_KEY);
-    if (raw == null) return false;
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
     return raw === "1";
   } catch {
-    return false;
+    return fallback;
   }
+}
+
+/** @deprecated use left/right panel keys */
+export function getPersistedSidebarOpen(): boolean {
+  return readBool(RIGHT_PANEL_KEY, false) || readBool(LEFT_PANEL_KEY, false);
 }
 
 type AppState = {
@@ -80,21 +88,24 @@ type AppState = {
   hoveredRoom: Room | null;
   selectedElement: SelectedElement | null;
   colorMode: ColorMode;
+  activeColorPalette: ColorPaletteId;
   renderMode: RenderMode;
-  /** Glass lighting panel (0–1 each). */
   lighting: {
     transparency: number;
     color: number;
     shadow: number;
     indirectLight: number;
   };
-  /** 0 = floor bottom (most cut), 1 = floor top (uncut). */
+  /** 0 = floor bottom, 0.5 = mid (default), 1 = floor top. */
   sliceProgress: number;
   isLoadingModel: boolean;
   loadError: string | null;
   loadProgress: number;
   loadMessage: string;
   savedViews: SavedView[];
+  leftPanelOpen: boolean;
+  rightPanelOpen: boolean;
+  /** @deprecated alias of rightPanelOpen for older callers */
   sidebarOpen: boolean;
   headerExpanded: boolean;
   isHeaderCollapsed: boolean;
@@ -107,6 +118,7 @@ type AppState = {
   setHoveredRoom: (room: Room | null) => void;
   setSelectedElement: (el: SelectedElement | null) => void;
   setColorMode: (mode: ColorMode) => void;
+  setActiveColorPalette: (id: ColorPaletteId) => void;
   setRenderMode: (mode: RenderMode) => void;
   setLighting: (
     partial: Partial<{
@@ -120,6 +132,10 @@ type AppState = {
   setIsLoadingModel: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
   setLoadProgress: (progress: number, message?: string) => void;
+  setLeftPanelOpen: (open: boolean) => void;
+  setRightPanelOpen: (open: boolean) => void;
+  toggleLeftPanel: () => void;
+  toggleRightPanel: () => void;
   setSidebarOpen: (open: boolean) => void;
   toggleSidebar: () => void;
   setHeaderExpanded: (expanded: boolean) => void;
@@ -135,6 +151,28 @@ type AppState = {
   clearModelData: () => void;
 };
 
+function persistPanel(key: string, open: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, open ? "1" : "0");
+  } catch {
+    // ignore
+  }
+}
+
+function initialPalette(): ColorPaletteId {
+  if (typeof window === "undefined") return "standard";
+  try {
+    const raw = localStorage.getItem(PALETTE_KEY);
+    if (raw === "softPastel" || raw === "warmPastel" || raw === "standard") {
+      return raw;
+    }
+  } catch {
+    // ignore
+  }
+  return "standard";
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   activeModelId: null,
   activeModelLabel: null,
@@ -145,6 +183,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   hoveredRoom: null,
   selectedElement: null,
   colorMode: "heizlast",
+  activeColorPalette: initialPalette(),
   renderMode: "fullColor",
   lighting: {
     transparency: 0.7,
@@ -152,12 +191,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     shadow: 0.55,
     indirectLight: 0.45,
   },
-  sliceProgress: 1,
+  sliceProgress: 0.5,
   isLoadingModel: false,
   loadError: null,
   loadProgress: 0,
   loadMessage: "",
   savedViews: [],
+  leftPanelOpen: false,
+  rightPanelOpen: false,
   sidebarOpen: false,
   headerExpanded: true,
   isHeaderCollapsed: false,
@@ -178,11 +219,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   setFloors: (floors) => set({ floors }),
   setRooms: (rooms) => set({ rooms }),
   setSelectedFloor: (floorId) =>
-    set({ selectedFloor: floorId, sliceProgress: 1 }),
+    set({
+      selectedFloor: floorId,
+      // Mid-height cross-section by default when a floor is chosen
+      sliceProgress: floorId ? 0.5 : 0.5,
+      selectedRoomId: null,
+    }),
   setSelectedRoomId: (roomId) => set({ selectedRoomId: roomId }),
   setHoveredRoom: (room) => set({ hoveredRoom: room }),
   setSelectedElement: (el) => set({ selectedElement: el }),
   setColorMode: (mode) => set({ colorMode: mode }),
+  setActiveColorPalette: (id) => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(PALETTE_KEY, id);
+      } catch {
+        // ignore
+      }
+    }
+    set({ activeColorPalette: id });
+  },
   setRenderMode: (mode) => set({ renderMode: mode }),
   setLighting: (partial) =>
     set((s) => ({
@@ -204,21 +260,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...(message != null ? { loadMessage: message } : {}),
     }),
 
-  setSidebarOpen: (open) => {
-    if (typeof window !== "undefined") {
-      try {
-        localStorage.setItem(SIDEBAR_KEY, open ? "1" : "0");
-      } catch {
-        // ignore
-      }
-    }
-    set({ sidebarOpen: open });
+  setLeftPanelOpen: (open) => {
+    persistPanel(LEFT_PANEL_KEY, open);
+    set({ leftPanelOpen: open });
   },
+  setRightPanelOpen: (open) => {
+    persistPanel(RIGHT_PANEL_KEY, open);
+    set({ rightPanelOpen: open, sidebarOpen: open });
+  },
+  toggleLeftPanel: () => get().setLeftPanelOpen(!get().leftPanelOpen),
+  toggleRightPanel: () => get().setRightPanelOpen(!get().rightPanelOpen),
 
-  toggleSidebar: () => {
-    const next = !get().sidebarOpen;
-    get().setSidebarOpen(next);
-  },
+  setSidebarOpen: (open) => get().setRightPanelOpen(open),
+  toggleSidebar: () => get().toggleRightPanel(),
 
   setHeaderExpanded: (expanded) => set({ headerExpanded: expanded }),
   setHeaderCollapsed: (collapsed) => set({ isHeaderCollapsed: collapsed }),
@@ -257,6 +311,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedRoomId: null,
       hoveredRoom: null,
       selectedElement: null,
-      sliceProgress: 1,
+      sliceProgress: 0.5,
     }),
 }));
+
+/** Hydrate panel open state after mount (avoids SSR mismatch). */
+export function hydratePanelState(): void {
+  useAppStore.getState().setLeftPanelOpen(readBool(LEFT_PANEL_KEY, false));
+  useAppStore.getState().setRightPanelOpen(readBool(RIGHT_PANEL_KEY, false));
+}

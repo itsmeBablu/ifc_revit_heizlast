@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { Floor } from "./types";
+import type { Floor, Room } from "./types";
 
 type CacheKey = string;
 
@@ -14,8 +14,10 @@ function getRenderer(size: number): THREE.WebGLRenderer {
       alpha: true,
       preserveDrawingBuffer: true,
       powerPreference: "low-power",
+      stencil: true,
     });
     sharedRenderer.outputColorSpace = THREE.SRGBColorSpace;
+    sharedRenderer.localClippingEnabled = true;
   }
   sharedRenderer.setSize(size, size, false);
   sharedRenderer.setPixelRatio(1);
@@ -23,87 +25,119 @@ function getRenderer(size: number): THREE.WebGLRenderer {
   return sharedRenderer;
 }
 
-function floorElevationRange(
-  floor: Floor,
-  floors: Floor[],
-): { minY: number; maxY: number } {
-  const sorted = [...floors].sort((a, b) => a.elevation - b.elevation);
-  const idx = sorted.findIndex((f) => f.id === floor.id);
-  const minY = floor.elevation - 0.35;
-  const next = idx >= 0 ? sorted[idx + 1] : undefined;
-  const maxY = next ? next.elevation - 0.05 : floor.elevation + 4.5;
-  return { minY, maxY };
-}
-
 /**
- * Render an uncolored top-down orthographic snapshot of a single floor's
- * shell geometry. Results are cached per model+floor until clearFloorSnapshots().
+ * Simple 2D plan of the selected floor:
+ * - Isolates that floor's shell + room geometries
+ * - Cuts at mid-height so the plan reads as a clean floor plate
+ * - Flat uncolored MeshBasic materials (layout-style)
  */
 export function renderFloorSnapshot(
-  shellGroup: THREE.Group,
+  shellGroup: THREE.Group | null,
   floor: Floor,
   floors: Floor[],
   modelKey: string,
+  rooms: Room[] = [],
   size = 640,
 ): string | null {
-  const cacheKey = `${modelKey}::${floor.id}::${size}`;
+  const cacheKey = `${modelKey}::${floor.id}::${size}::v2`;
   const cached = snapshotCache.get(cacheKey);
   if (cached) return cached;
-
-  const { minY, maxY } = floorElevationRange(floor, floors);
-
-  shellGroup.updateMatrixWorld(true);
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf2f4f7);
 
   const planGroup = new THREE.Group();
-  const material = new THREE.MeshBasicMaterial({
-    color: 0x5c6570,
+  const wallMat = new THREE.MeshBasicMaterial({
+    color: 0x6b7280,
+    side: THREE.DoubleSide,
+    transparent: false,
+    depthWrite: true,
+  });
+  const roomMat = new THREE.MeshBasicMaterial({
+    color: 0x9ca3af,
     side: THREE.DoubleSide,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.55,
+    depthWrite: false,
   });
 
   const box = new THREE.Box3();
   let hasGeom = false;
 
-  shellGroup.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh)) return;
-    const floorId = obj.userData.floorId as string | undefined;
-
-    // Prefer explicit floor tagging; fall back to elevation band
-    let include = floorId === floor.id;
-    if (!include && !floorId) {
-      const meshBox = new THREE.Box3().setFromObject(obj);
-      if (meshBox.isEmpty()) return;
-      const cy = (meshBox.min.y + meshBox.max.y) / 2;
-      include = cy >= minY && cy < maxY;
-    }
-    if (!include) return;
-
-    const mesh = new THREE.Mesh(obj.geometry, material);
-    mesh.applyMatrix4(obj.matrixWorld);
+  const addMesh = (
+    geometry: THREE.BufferGeometry,
+    matrixWorld: THREE.Matrix4 | null,
+    mat: THREE.Material,
+  ) => {
+    const mesh = new THREE.Mesh(geometry, mat);
+    if (matrixWorld) mesh.applyMatrix4(matrixWorld);
     planGroup.add(mesh);
-
     const meshBox = new THREE.Box3().setFromObject(mesh);
     if (!meshBox.isEmpty()) {
       box.union(meshBox);
       hasGeom = true;
     }
-  });
+  };
+
+  // 1) Shell pieces tagged to this floor
+  if (shellGroup) {
+    shellGroup.updateMatrixWorld(true);
+    shellGroup.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      if (obj.userData.floorId !== floor.id) return;
+      if (!obj.geometry) return;
+      addMesh(obj.geometry, obj.matrixWorld, wallMat);
+    });
+  }
+
+  // 2) Room overlays for this floor (covers room-only IFCs with no shell)
+  for (const room of rooms) {
+    if (room.floorId !== floor.id) continue;
+    if (!room.geometry || room.geometry.attributes.position == null) continue;
+    addMesh(room.geometry, null, roomMat);
+  }
+
+  // 3) Elevation-band fallback if nothing tagged
+  if (!hasGeom && shellGroup) {
+    const sorted = [...floors].sort((a, b) => a.elevation - b.elevation);
+    const idx = sorted.findIndex((f) => f.id === floor.id);
+    let minY = floor.elevation;
+    let maxY =
+      idx >= 0 && sorted[idx + 1]
+        ? sorted[idx + 1].elevation
+        : floor.elevation + 4.5;
+    if (Math.abs(minY) > 100 || Math.abs(maxY) > 100) {
+      minY /= 1000;
+      maxY /= 1000;
+    }
+    shellGroup.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      if (obj.userData.floorId) return; // already considered tagged
+      const meshBox = new THREE.Box3().setFromObject(obj);
+      if (meshBox.isEmpty()) return;
+      const cy = (meshBox.min.y + meshBox.max.y) / 2;
+      if (cy < minY - 0.5 || cy >= maxY) return;
+      addMesh(obj.geometry, obj.matrixWorld, wallMat);
+    });
+  }
 
   if (!hasGeom) {
-    material.dispose();
+    wallMat.dispose();
+    roomMat.dispose();
     return null;
   }
 
-  scene.add(planGroup);
-
+  // Mid-height horizontal clip for a clean plan cut
   const size3 = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  const span = Math.max(size3.x, size3.z, 1) * 1.15;
+  const midY = box.min.y + Math.max(size3.y, 0.1) * 0.5;
+  const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), midY);
+  wallMat.clippingPlanes = [clipPlane];
+  roomMat.clippingPlanes = [clipPlane];
 
+  scene.add(planGroup);
+
+  const span = Math.max(size3.x, size3.z, 1) * 1.12;
   const camera = new THREE.OrthographicCamera(
     -span / 2,
     span / 2,
@@ -112,16 +146,22 @@ export function renderFloorSnapshot(
     0.1,
     5000,
   );
-  camera.position.set(center.x, center.y + Math.max(size3.y, 2) + 40, center.z);
+  camera.position.set(center.x, midY + Math.max(size3.y, 2) + 40, center.z);
   camera.up.set(0, 0, -1);
-  camera.lookAt(center.x, center.y, center.z);
+  camera.lookAt(center.x, midY, center.z);
   camera.updateProjectionMatrix();
 
   const renderer = getRenderer(size);
   renderer.render(scene, camera);
   const dataUrl = renderer.domElement.toDataURL("image/png");
 
-  material.dispose();
+  wallMat.dispose();
+  roomMat.dispose();
+  // Dispose only cloned scene meshes' refs — geometries are shared, don't dispose
+  while (planGroup.children.length) {
+    planGroup.remove(planGroup.children[0]);
+  }
+
   snapshotCache.set(cacheKey, dataUrl);
   return dataUrl;
 }

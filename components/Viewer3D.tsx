@@ -14,7 +14,10 @@ import { flyTo, frameBoundingBox } from "@/lib/flyTo";
 import { getElementDetails } from "@/lib/ifcClient";
 import { debugLog } from "@/lib/debugLog";
 import { ViewCube } from "@/lib/viewCube";
-import { ClipSliceController } from "@/lib/clipSlice";
+import {
+  ClipSliceController,
+  floorWorldYBounds,
+} from "@/lib/clipSlice";
 import type { RenderMode, Room } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
 import { useModelScene } from "./ModelSceneContext";
@@ -37,10 +40,14 @@ type Props = {
   className?: string;
 };
 
-function roomColorHex(room: Room, mode: "heizlast" | "temperature"): string {
+function roomColorHex(
+  room: Room,
+  mode: "heizlast" | "temperature",
+  palette?: string,
+): string {
   return mode === "heizlast"
-    ? heizlastToColor(room.heatLoad)
-    : temperatureToColor(room.temperature);
+    ? heizlastToColor(room.heatLoad, palette)
+    : temperatureToColor(room.temperature, palette);
 }
 
 /** Per-color material templates — always return a CLONE so rooms never share GPU state. */
@@ -82,6 +89,9 @@ function isOverlayRoomMesh(obj: THREE.Object3D): obj is THREE.Mesh {
   return (
     obj instanceof THREE.Mesh &&
     obj.userData.kind === "room" &&
+    !obj.userData.isClipStencil &&
+    !obj.userData.isClipCap &&
+    !obj.userData.isSelectionOutline &&
     obj.material instanceof THREE.MeshStandardMaterial
   );
 }
@@ -89,9 +99,42 @@ function isOverlayRoomMesh(obj: THREE.Object3D): obj is THREE.Mesh {
 function isShellMesh(obj: THREE.Object3D): obj is THREE.Mesh {
   return (
     obj instanceof THREE.Mesh &&
+    obj.userData.kind !== "room" &&
     !obj.userData.isClipStencil &&
+    !obj.userData.isClipCap &&
+    !obj.userData.isSelectionOutline &&
     obj.material instanceof THREE.MeshStandardMaterial
   );
+}
+
+function clearSelectionOutlines(root: THREE.Object3D | null | undefined) {
+  if (!root) return;
+  const toRemove: THREE.Object3D[] = [];
+  root.traverse((o) => {
+    if (o.userData.isSelectionOutline) toRemove.push(o);
+  });
+  for (const o of toRemove) {
+    o.parent?.remove(o);
+    if (o instanceof THREE.Mesh) {
+      (o.material as THREE.Material).dispose();
+    }
+  }
+}
+
+/** White backface outline — shared for 3D click + list select. */
+function attachWhiteOutline(mesh: THREE.Mesh) {
+  clearSelectionOutlines(mesh);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: true,
+  });
+  const outline = new THREE.Mesh(mesh.geometry, mat);
+  outline.scale.setScalar(1.055);
+  outline.userData.isSelectionOutline = true;
+  outline.renderOrder = (mesh.renderOrder ?? 0) - 1;
+  mesh.add(outline);
 }
 
 function applyRenderMode(
@@ -228,6 +271,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
 
   const { shellGroup, rooms } = useModelScene();
   const colorMode = useAppStore((s) => s.colorMode);
+  const activeColorPalette = useAppStore((s) => s.activeColorPalette);
   const renderMode = useAppStore((s) => s.renderMode);
   const lighting = useAppStore((s) => s.lighting);
   const selectedFloor = useAppStore((s) => s.selectedFloor);
@@ -238,7 +282,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const setHoveredRoom = useAppStore((s) => s.setHoveredRoom);
   const setSelectedRoomId = useAppStore((s) => s.setSelectedRoomId);
   const setSelectedElement = useAppStore((s) => s.setSelectedElement);
-  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
+  const setLeftPanelOpen = useAppStore((s) => s.setLeftPanelOpen);
   const roomsFromStore = useAppStore((s) => s.rooms);
 
   const fitToVisible = () => {
@@ -496,7 +540,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     let logged = 0;
     for (const room of sourceRooms) {
       if (!room.geometry || room.geometry.attributes.position == null) continue;
-      const hex = roomColorHex(room, colorMode);
+      const hex = roomColorHex(room, colorMode, activeColorPalette);
       if (logged < 8) {
         debugLog(
           "Viewer3D",
@@ -525,15 +569,8 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       useAppStore.getState().lighting,
     );
 
-    // Register clip-cap targets (shell + room overlays)
-    const clipMeshes: THREE.Mesh[] = [];
-    shellCloneRef.current?.traverse((o) => {
-      if (isShellMesh(o)) clipMeshes.push(o);
-    });
-    overlays.traverse((o) => {
-      if (isOverlayRoomMesh(o)) clipMeshes.push(o);
-    });
-    clipRef.current?.registerMeshes(clipMeshes);
+    // Floor-scoped clip registration happens in the selectedFloor effect
+    clipRef.current?.clear();
 
     if (hasModel) {
       requestAnimationFrame(() => fitToVisible());
@@ -551,7 +588,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     for (const [id, mesh] of roomMeshById.current) {
       const room = byId.get(id);
       if (!room) continue;
-      const hex = roomColorHex(room, colorMode);
+      const hex = roomColorHex(room, colorMode, activeColorPalette);
       const prev = mesh.material;
       mesh.material = materialCacheRef.current.get(hex);
       mesh.userData.colorHex = hex;
@@ -567,12 +604,9 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       true,
       lighting,
     );
-    // Re-bind clipping planes after material swap
-    const st = useAppStore.getState();
-    if (st.selectedFloor && st.sliceProgress < 0.995) {
-      clipRef.current?.setEnabled(true);
-    }
-  }, [colorMode, rooms, roomsFromStore, renderMode, lighting]);
+    clipRef.current?.rebindMaterials();
+    clipRef.current?.syncAllCapAppearance();
+  }, [colorMode, activeColorPalette, rooms, roomsFromStore, renderMode, lighting]);
 
   // Render mode + lighting
   useEffect(() => {
@@ -583,6 +617,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       true,
       lighting,
     );
+    clipRef.current?.rebindMaterials();
 
     const sun = sunRef.current;
     const ambient = ambientRef.current;
@@ -613,48 +648,61 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     }
   }, [renderMode, lighting]);
 
-  // Horizontal floor slice / clipping caps
+  // Register selected-floor meshes for clipping + solid caps
   useEffect(() => {
     const clip = clipRef.current;
     if (!clip) return;
 
     if (!selectedFloor) {
+      clip.clear();
       clip.setEnabled(false);
       return;
     }
 
-    const sorted = [...floors].sort((a, b) => a.elevation - b.elevation);
-    const idx = sorted.findIndex((f) => f.id === selectedFloor);
-    if (idx < 0) {
-      clip.setEnabled(false);
-      return;
-    }
+    const floorMeshes: THREE.Mesh[] = [];
+    shellCloneRef.current?.traverse((o) => {
+      if (isShellMesh(o) && o.userData.floorId === selectedFloor) {
+        floorMeshes.push(o);
+      }
+    });
+    overlaysRef.current?.traverse((o) => {
+      if (isOverlayRoomMesh(o) && o.userData.floorId === selectedFloor) {
+        floorMeshes.push(o);
+      }
+    });
 
-    const floor = sorted[idx];
-    const next = sorted[idx + 1];
-    let yMax = next?.elevation;
-    if (yMax == null) {
-      const box = new THREE.Box3();
-      shellCloneRef.current?.traverse((o) => {
-        if (o instanceof THREE.Mesh && o.visible) box.expandByObject(o);
-      });
-      overlaysRef.current?.traverse((o) => {
-        if (o instanceof THREE.Mesh && o.visible) box.expandByObject(o);
-      });
-      yMax = box.isEmpty() ? floor.elevation + 3 : box.max.y;
-    }
-    const yMin = floor.elevation;
-    const span = Math.max(0.05, yMax - yMin);
-    // progress 1 = uncut (plane at top); 0 = cut at floor bottom
-    const y = yMin + sliceProgress * span;
+    clip.setMeshes(floorMeshes);
+    clip.setEnabled(true);
+    clip.setCapsEnabled(true);
 
-    if (sliceProgress >= 0.995) {
-      clip.setEnabled(false);
-    } else {
-      clip.setEnabled(true);
-      clip.setHeight(y);
-      clip.syncStencilTransforms();
+    const bounds = floorWorldYBounds(selectedFloor, [
+      shellCloneRef.current,
+      overlaysRef.current,
+    ]);
+    if (bounds) {
+      const span = Math.max(0.05, bounds.yMax - bounds.yMin);
+      const t = useAppStore.getState().sliceProgress;
+      clip.setHeight(bounds.yMin + t * span);
+      debugLog(
+        "Viewer3D",
+        `slice Y [${bounds.yMin.toFixed(2)}, ${bounds.yMax.toFixed(2)}] n=${floorMeshes.length}`,
+        floorMeshes.length ? "ok" : "warn",
+      );
     }
+  }, [selectedFloor, floors, shellGroup, rooms, colorMode, activeColorPalette]);
+
+  // Instant plane height while dragging — world Y from mesh AABB
+  useEffect(() => {
+    const clip = clipRef.current;
+    if (!clip || !selectedFloor) return;
+
+    const bounds = floorWorldYBounds(selectedFloor, [
+      shellCloneRef.current,
+      overlaysRef.current,
+    ]);
+    if (!bounds) return;
+    const span = Math.max(0.05, bounds.yMax - bounds.yMin);
+    clip.setHeight(bounds.yMin + sliceProgress * span);
   }, [selectedFloor, sliceProgress, floors, shellGroup, rooms]);
 
   // Floor visibility
@@ -678,27 +726,34 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFloor, shellGroup, rooms]);
 
-  // Highlight selected room / element — do NOT fly the camera
+  // White outline for selected room (3D or list) — no colored emissive tint
   useEffect(() => {
     const baseOpacity = useAppStore.getState().lighting.transparency;
     const selectedExpress = selectedElement?.expressId ?? null;
+    const lightMode = useAppStore.getState().renderMode === "light";
+
     for (const [id, mesh] of roomMeshById.current) {
+      clearSelectionOutlines(mesh);
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const isSel =
         id === selectedRoomId || mesh.userData.expressId === selectedExpress;
-      mat.opacity = isSel ? Math.min(0.95, baseOpacity + 0.2) : baseOpacity;
-      if (!isSel && useAppStore.getState().renderMode !== "light") {
+      mat.opacity = isSel ? Math.min(0.95, baseOpacity + 0.15) : baseOpacity;
+      if (!lightMode) {
         mat.emissive.setHex(0x000000);
-      } else if (isSel) {
-        mat.emissive.setHex(0x223344);
+        mat.emissiveIntensity = 0;
       }
+      if (isSel) attachWhiteOutline(mesh);
       mat.needsUpdate = true;
     }
+
     shellCloneRef.current?.traverse((obj) => {
       if (!isShellMesh(obj)) return;
+      clearSelectionOutlines(obj);
       const mat = obj.material as THREE.MeshStandardMaterial;
       const isSel = obj.userData.expressId === selectedExpress;
-      mat.emissive.setHex(isSel ? 0x3b82f6 : 0x000000);
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+      if (isSel) attachWhiteOutline(obj);
       mat.needsUpdate = true;
     });
   }, [selectedRoomId, selectedElement, lighting.transparency]);
@@ -722,17 +777,25 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       if (shellCloneRef.current) targets.push(shellCloneRef.current);
 
       const hits = raycaster.current.intersectObjects(targets, true);
-      return hits[0] ?? null;
+      const hit = hits.find(
+        (h) =>
+          !h.object.userData.isClipStencil &&
+          !h.object.userData.isSelectionOutline &&
+          !h.object.userData.isClipCap,
+      );
+      return hit ?? null;
     };
 
     const onMove = (e: PointerEvent) => {
       onPointerMove?.(e.clientX, e.clientY);
       const cube = viewCubeRef.current;
       if (cube?.containsClientPoint(e.clientX, e.clientY, canvas)) {
+        cube.updateHover(e.clientX, e.clientY, canvas);
         canvas.style.cursor = "pointer";
         setHoveredRoom(null);
         return;
       }
+      cube?.clearHover();
       const hit = pickHit(e.clientX, e.clientY);
       if (!hit) {
         setHoveredRoom(null);
@@ -753,6 +816,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     };
 
     const onLeave = () => {
+      viewCubeRef.current?.clearHover();
       setHoveredRoom(null);
       canvas.style.cursor = "default";
     };
@@ -795,7 +859,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
           );
           if (details) {
             setSelectedElement(details);
-            setSidebarOpen(true);
+            setLeftPanelOpen(true);
             debugLog(
               "Viewer3D",
               `selected ${details.typeName}: ${details.name}`,
@@ -839,17 +903,11 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     setHoveredRoom,
     setSelectedRoomId,
     setSelectedElement,
-    setSidebarOpen,
+    setLeftPanelOpen,
   ]);
 
   return (
-    <div ref={containerRef} className={`relative ${className ?? ""}`} data-viewer-root>
-      {/* Glass frame around ViewCube scissor region (top-right) */}
-      <div
-        className="pointer-events-none absolute top-4 right-4 z-[5] h-[100px] w-[100px] rounded-2xl border border-white/50 shadow-[0_8px_28px_rgba(0,0,0,0.08)]"
-        aria-hidden
-      />
-    </div>
+    <div ref={containerRef} className={`relative ${className ?? ""}`} data-viewer-root />
   );
 });
 

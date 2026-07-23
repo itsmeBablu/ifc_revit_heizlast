@@ -47,7 +47,7 @@ export default function FloorRoomsPanel({ embedded = false }: Props) {
   }, [activeModelId, shellGroup]);
 
   useEffect(() => {
-    if (!shellGroup || !selectedFloorObj || !activeModelId) {
+    if (!selectedFloorObj || !activeModelId) {
       setSnapshotUrl(null);
       return;
     }
@@ -57,12 +57,13 @@ export default function FloorRoomsPanel({ embedded = false }: Props) {
         selectedFloorObj,
         sortedFloors,
         activeModelId,
+        rooms,
       );
       setSnapshotUrl(url);
     } catch {
       setSnapshotUrl(null);
     }
-  }, [shellGroup, selectedFloorObj, sortedFloors, activeModelId]);
+  }, [shellGroup, selectedFloorObj, sortedFloors, activeModelId, rooms]);
 
   const body = (
     <div className="space-y-3">
@@ -99,7 +100,7 @@ export default function FloorRoomsPanel({ embedded = false }: Props) {
               />
             ) : (
               <div className="flex aspect-square items-center justify-center rounded-2xl bg-white/30 text-xs text-zinc-400">
-                No shell geometry for this floor
+                No floor plan for this level
               </div>
             )}
           </GlassInset>

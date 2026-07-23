@@ -12,7 +12,7 @@ import { clearFloorSnapshots } from "@/lib/floorSnapshot";
 import { debugLog } from "@/lib/debugLog";
 import { getModelById } from "@/lib/modelRegistry";
 import {
-  getPersistedSidebarOpen,
+  hydratePanelState,
   persistModelId,
   useAppStore,
 } from "@/store/useAppStore";
@@ -22,7 +22,8 @@ import Viewer3D, { type Viewer3DHandle } from "./Viewer3D";
 import RoomTooltip from "./RoomTooltip";
 import ModelSelector from "./ModelSelector";
 import LoadIfcButton from "./LoadIfcButton";
-import SidebarPanel from "./SidebarPanel";
+import FloorsPanel from "./FloorsPanel";
+import LegendPanel from "./LegendPanel";
 import DebugPanel from "./DebugPanel";
 import GlassPanel from "./GlassPanel";
 import { GlassButton, IconAlert } from "./ui";
@@ -47,10 +48,13 @@ export default function ViewerApp() {
   const loadError = useAppStore((s) => s.loadError);
   const loadProgress = useAppStore((s) => s.loadProgress);
   const loadMessage = useAppStore((s) => s.loadMessage);
-  const sidebarOpen = useAppStore((s) => s.sidebarOpen);
+  const leftPanelOpen = useAppStore((s) => s.leftPanelOpen);
+  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
   const isHeaderCollapsed = useAppStore((s) => s.isHeaderCollapsed);
   const setHeaderCollapsed = useAppStore((s) => s.setHeaderCollapsed);
   const activeModelLabel = useAppStore((s) => s.activeModelLabel);
+  const selectedRoomId = useAppStore((s) => s.selectedRoomId);
+  const hoveredRoom = useAppStore((s) => s.hoveredRoom);
 
   const setActiveModelId = useAppStore((s) => s.setActiveModelId);
   const setFloors = useAppStore((s) => s.setFloors);
@@ -59,17 +63,18 @@ export default function ViewerApp() {
   const setLoadError = useAppStore((s) => s.setLoadError);
   const setLoadProgress = useAppStore((s) => s.setLoadProgress);
   const clearModelData = useAppStore((s) => s.clearModelData);
-  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
+  const setLeftPanelOpen = useAppStore((s) => s.setLeftPanelOpen);
+  const setRightPanelOpen = useAppStore((s) => s.setRightPanelOpen);
 
   useEffect(() => {
     debugLog("ViewerApp", "mount", "info");
-    setSidebarOpen(getPersistedSidebarOpen());
+    hydratePanelState();
     try {
       localStorage.removeItem("ifc-viewer:lastModelId");
     } catch {
       // ignore
     }
-  }, [setSidebarOpen]);
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 768px)");
@@ -398,18 +403,32 @@ export default function ViewerApp() {
         )}
 
         <RoomTooltip x={pointer.x} y={pointer.y} />
+        {selectedRoomId && !hoveredRoom && (() => {
+          const room = rooms.find((r) => r.id === selectedRoomId);
+          if (!room) return null;
+          return (
+            <RoomTooltip
+              room={room}
+              opaque
+              anchor={{
+                left: leftPanelOpen ? 380 : 24,
+                top: 120,
+              }}
+            />
+          );
+        })()}
         <DebugPanel />
         <ViewerToolbar viewerRef={viewerRef} targetRef={rootRef} />
 
-        {/* RIGHT slide-over — slim full-height gray arrow INSIDE */}
+        {/* LEFT — Floors & Rooms */}
         {isDesktop && (
           <aside
-            className={`fixed top-16 bottom-4 right-4 z-[35] flex w-[min(360px,calc(100vw-2rem))] flex-col ${motion.sidebar} ${
-              sidebarOpen
+            className={`fixed top-16 bottom-4 left-4 z-[35] flex w-[min(360px,calc(100vw-2rem))] flex-col ${motion.sidebar} ${
+              leftPanelOpen
                 ? "pointer-events-auto translate-x-0 opacity-100"
-                : "pointer-events-none translate-x-[calc(100%+1.5rem)] opacity-0"
+                : "pointer-events-none -translate-x-[calc(100%+1.5rem)] opacity-0"
             }`}
-            aria-hidden={!sidebarOpen}
+            aria-hidden={!leftPanelOpen}
           >
             <GlassPanel
               variant="panel"
@@ -419,8 +438,75 @@ export default function ViewerApp() {
             >
               <button
                 type="button"
-                onClick={() => setSidebarOpen(false)}
-                aria-label="Hide sidebar"
+                onClick={() => setLeftPanelOpen(false)}
+                aria-label="Hide floors panel"
+                className="absolute inset-y-0 right-0 z-10 flex w-5 items-center justify-center rounded-r-3xl bg-zinc-400/30 text-zinc-600 transition-colors duration-300 ease-out hover:bg-zinc-400/45"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="m15 6-6 6 6 6" />
+                </svg>
+              </button>
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth pr-5">
+                <FloorsPanel viewerRef={viewerRef} />
+              </div>
+            </GlassPanel>
+          </aside>
+        )}
+
+        {isDesktop && !leftPanelOpen && (
+          <button
+            type="button"
+            onClick={() => setLeftPanelOpen(true)}
+            aria-label="Show floors panel"
+            className="fixed inset-y-[20%] left-0 z-40 flex w-5 items-center justify-center transition-all duration-350 ease-out"
+          >
+            <div className="flex h-full w-full items-center justify-center rounded-r-xl bg-zinc-400/35 text-zinc-600 backdrop-blur-sm hover:bg-zinc-400/50">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="m9 6 6 6-6 6" />
+              </svg>
+            </div>
+          </button>
+        )}
+
+        {/* RIGHT — Legend (content-sized, below ViewCube) */}
+        {isDesktop && (
+          <aside
+            className={`fixed top-36 right-4 z-[35] flex w-[min(280px,calc(100vw-2rem))] flex-col ${motion.sidebar} ${
+              rightPanelOpen
+                ? "pointer-events-auto translate-x-0 opacity-100"
+                : "pointer-events-none translate-x-[calc(100%+1.5rem)] opacity-0"
+            }`}
+            aria-hidden={!rightPanelOpen}
+          >
+            <GlassPanel
+              variant="panel"
+              zIndex={35}
+              wrapperClassName="relative overflow-hidden"
+            >
+              <button
+                type="button"
+                onClick={() => setRightPanelOpen(false)}
+                aria-label="Hide legend"
                 className="absolute inset-y-0 left-0 z-10 flex w-5 items-center justify-center rounded-l-3xl bg-zinc-400/30 text-zinc-600 transition-colors duration-300 ease-out hover:bg-zinc-400/45"
               >
                 <svg
@@ -437,20 +523,18 @@ export default function ViewerApp() {
                   <path d="m9 6 6 6-6 6" />
                 </svg>
               </button>
-
-              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth pl-5">
-                <SidebarPanel viewerRef={viewerRef} />
+              <div className="pl-5">
+                <LegendPanel />
               </div>
             </GlassPanel>
           </aside>
         )}
 
-        {/* Slim floating re-open handle */}
-        {isDesktop && !sidebarOpen && (
+        {isDesktop && !rightPanelOpen && (
           <button
             type="button"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Show sidebar"
+            onClick={() => setRightPanelOpen(true)}
+            aria-label="Show legend"
             className="fixed inset-y-[20%] right-0 z-40 flex w-5 items-center justify-center transition-all duration-350 ease-out"
           >
             <div className="flex h-full w-full items-center justify-center rounded-l-xl bg-zinc-400/35 text-zinc-600 backdrop-blur-sm hover:bg-zinc-400/50">
@@ -471,13 +555,16 @@ export default function ViewerApp() {
           </button>
         )}
 
-        {/* Mobile bottom sheet */}
+        {/* Mobile bottom sheet — floors + legend stacked */}
         {!isDesktop && (
           <>
-            {!sidebarOpen && (
+            {!(leftPanelOpen || rightPanelOpen) && (
               <button
                 type="button"
-                onClick={() => setSidebarOpen(true)}
+                onClick={() => {
+                  setLeftPanelOpen(true);
+                  setRightPanelOpen(true);
+                }}
                 aria-label="Show panels"
                 className="fixed right-4 bottom-5 z-40 h-14 w-14"
               >
@@ -506,7 +593,7 @@ export default function ViewerApp() {
 
             <div
               className={`fixed inset-0 z-50 transition-opacity duration-300 ease-out ${
-                sidebarOpen
+                leftPanelOpen || rightPanelOpen
                   ? "pointer-events-auto opacity-100"
                   : "pointer-events-none opacity-0"
               }`}
@@ -515,11 +602,16 @@ export default function ViewerApp() {
                 type="button"
                 aria-label="Close panels"
                 className="absolute inset-0 bg-zinc-900/30"
-                onClick={() => setSidebarOpen(false)}
+                onClick={() => {
+                  setLeftPanelOpen(false);
+                  setRightPanelOpen(false);
+                }}
               />
               <div
                 className={`absolute inset-x-3 bottom-3 top-[14%] flex flex-col ${motion.sidebar} ${
-                  sidebarOpen ? "translate-y-0" : "translate-y-10"
+                  leftPanelOpen || rightPanelOpen
+                    ? "translate-y-0"
+                    : "translate-y-10"
                 }`}
               >
                 <GlassPanel
@@ -532,13 +624,18 @@ export default function ViewerApp() {
                     <p className={heading.panel}>Details</p>
                     <GlassButton
                       className="!px-3"
-                      onClick={() => setSidebarOpen(false)}
+                      onClick={() => {
+                        setLeftPanelOpen(false);
+                        setRightPanelOpen(false);
+                      }}
                     >
                       Close
                     </GlassButton>
                   </div>
                   <div className="min-h-0 flex-1 overflow-y-auto scroll-smooth">
-                    <SidebarPanel viewerRef={viewerRef} />
+                    <FloorsPanel viewerRef={viewerRef} />
+                    <div className="mx-3 border-t border-zinc-300/50" />
+                    <LegendPanel />
                   </div>
                 </GlassPanel>
               </div>
