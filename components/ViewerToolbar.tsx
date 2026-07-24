@@ -289,8 +289,16 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
     setPanel(null);
   };
 
-  const btn =
-    "flex h-10 w-10 items-center justify-center rounded-2xl text-zinc-700 transition-all duration-200 hover:bg-white/45 active:scale-95";
+  const yellowGloss =
+    "border border-amber-200/70 bg-gradient-to-br from-amber-200/95 via-yellow-300/85 to-amber-400/75 text-amber-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_4px_14px_rgba(251,191,36,0.35)] backdrop-blur-md";
+  const blueGloss =
+    "border border-sky-200/70 bg-gradient-to-br from-sky-200/95 via-sky-300/85 to-sky-400/75 text-sky-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_4px_14px_rgba(56,189,248,0.35)] backdrop-blur-md";
+  const btnBase =
+    "flex h-10 w-10 items-center justify-center rounded-full p-2 transition-all duration-200 active:scale-95";
+  const btnIdle = `${btnBase} border border-transparent text-zinc-700 hover:border-amber-200/70 hover:bg-gradient-to-br hover:from-amber-200/95 hover:via-yellow-300/85 hover:to-amber-400/75 hover:text-amber-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.65),0_4px_14px_rgba(251,191,36,0.35)] hover:backdrop-blur-md`;
+  const btnActive = `${btnBase} ${yellowGloss}`;
+  const btnPresentationIdle = `${btnBase} ${yellowGloss}`;
+  const btnPresentationOn = `${btnBase} ${blueGloss}`;
 
   const glassPopover =
     "fixed z-[80] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/40 bg-white/70 shadow-lg backdrop-blur-xl";
@@ -451,7 +459,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
             >
               <button
                 type="button"
-                className={btn}
+                className={btnIdle}
                 aria-label="Fit model to screen"
                 onClick={() => viewerRef.current?.fitVisible()}
               >
@@ -466,7 +474,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
               <button
                 ref={shadeBtnRef}
                 type="button"
-                className={`${btn} ${panel === "shade" ? "bg-white/45" : ""}`}
+                className={panel === "shade" ? btnActive : btnIdle}
                 aria-label="Shading mode"
                 aria-expanded={panel === "shade"}
                 onClick={() =>
@@ -484,7 +492,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
               <button
                 ref={lightBtnRef}
                 type="button"
-                className={`${btn} ${panel === "light" ? "bg-white/45" : ""}`}
+                className={panel === "light" ? btnActive : btnIdle}
                 aria-label="Lighting"
                 aria-expanded={panel === "light"}
                 onClick={() =>
@@ -502,7 +510,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
               <button
                 ref={saveBtnRef}
                 type="button"
-                className={`${btn} ${panel === "save" ? "bg-white/45" : ""}`}
+                className={panel === "save" ? btnActive : btnIdle}
                 aria-label="Save view"
                 aria-expanded={panel === "save"}
                 onClick={() => {
@@ -524,7 +532,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
             >
               <button
                 type="button"
-                className={btn}
+                className={isFullscreen ? btnActive : btnIdle}
                 aria-label={
                   isFullscreen ? "Exit fullscreen" : "Enter fullscreen"
                 }
@@ -554,11 +562,9 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
             >
               <button
                 type="button"
-                className={`flex h-10 w-10 items-center justify-center rounded-2xl p-2 transition-all duration-300 active:scale-95 ${
-                  isPresentationView
-                    ? "bg-gradient-to-br from-sky-500 to-sky-700 text-white shadow-[0_4px_14px_rgba(14,165,233,0.35)] ring-2 ring-sky-300/50"
-                    : "text-zinc-700 hover:bg-white/45"
-                }`}
+                className={
+                  isPresentationView ? btnPresentationOn : btnPresentationIdle
+                }
                 aria-label={
                   isPresentationView
                     ? "Exit presentation view"

@@ -183,7 +183,7 @@ export default function LegendBody({
               className="group relative block w-full cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"
             >
               <div
-                className="h-2.5 w-full rounded-full transition-opacity group-hover:opacity-90"
+                className="relative h-4 w-full overflow-hidden rounded-full border border-white/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_2px_8px_rgba(0,0,0,0.12)] transition-opacity group-hover:opacity-95"
                 style={{
                   background: heizlastGradientCss(
                     "to right",
@@ -191,16 +191,32 @@ export default function LegendBody({
                     heizlastRange,
                   ),
                 }}
-              />
+              >
+                <span
+                  className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-t-full bg-gradient-to-b from-white/55 to-transparent"
+                  aria-hidden
+                />
+              </div>
             </button>
-            <div className="flex justify-between gap-0.5 text-[10px] tabular-nums text-zinc-500">
-              {heizlastRange.map((t) => (
-                <span key={t} className="min-w-0 truncate text-center">
+            <div className="flex items-end justify-between gap-0.5 text-[10px] tabular-nums text-zinc-500">
+              {heizlastRange.map((t, i) => (
+                <span
+                  key={t}
+                  className={`min-w-0 truncate text-center ${
+                    i === heizlastRange.length - 1
+                      ? "flex items-baseline justify-end gap-0.5"
+                      : ""
+                  }`}
+                >
                   {t}
+                  {i === heizlastRange.length - 1 ? (
+                    <span className="shrink-0 text-[9px] text-zinc-400">
+                      W/m²
+                    </span>
+                  ) : null}
                 </span>
               ))}
             </div>
-            <p className="text-[10px] text-zinc-400">W/m²</p>
             {rangeOpen && (
               <div ref={rangeBlockRef}>
                 <LegendRangeInput
@@ -218,18 +234,25 @@ export default function LegendBody({
               type="button"
               title="Change color palette"
               onClick={() => setPaletteOpen((v) => !v)}
-              className="flex w-full flex-nowrap items-center justify-between gap-0.5 rounded-xl p-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"
+              className="flex w-full flex-nowrap items-center justify-between gap-1 rounded-xl p-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"
             >
               {tempStops.map((s) => (
                 <div
                   key={s.value}
-                  className="flex min-w-0 flex-1 items-center justify-center gap-0.5 rounded-lg bg-white/50 px-0.5 py-1 text-[9px] font-medium tabular-nums text-zinc-700"
+                  className="flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl bg-white/45 px-0.5 py-1.5"
                 >
                   <span
-                    className="inline-block h-2 w-2 shrink-0 rounded-sm"
+                    className="relative inline-block h-4 w-4 shrink-0 overflow-hidden rounded-md border border-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_2px_6px_rgba(0,0,0,0.14)]"
                     style={{ backgroundColor: s.color }}
-                  />
-                  <span className="truncate">{s.value}°</span>
+                  >
+                    <span
+                      className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/55 to-transparent"
+                      aria-hidden
+                    />
+                  </span>
+                  <span className="truncate text-[10px] font-medium tabular-nums text-zinc-700">
+                    {s.value}°
+                  </span>
                 </div>
               ))}
             </button>

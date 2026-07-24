@@ -328,12 +328,16 @@ export default function ViewerApp() {
           </div>
         )}
 
-        {/* Header: 50% default / 25% collapsed */}
+        {/* Header: fit content when empty; wider after model load */}
         <div
           data-app-header
           className={`pointer-events-none fixed top-3 left-1/2 z-40 -translate-x-1/2 transition-all duration-300 ease-out ${
-            isHeaderCollapsed ? "w-[min(25%,280px)]" : "w-[50%]"
-          } min-w-[220px] max-w-[720px]`}
+            isHeaderCollapsed
+              ? "w-[min(25%,280px)]"
+              : hasModel
+                ? "w-[50%] min-w-[260px] max-w-[720px]"
+                : "w-max max-w-[min(92vw,720px)]"
+          }`}
         >
           <div className="pointer-events-auto">
             <GlassPanel variant="panel" zIndex={40}>
@@ -355,7 +359,11 @@ export default function ViewerApp() {
                 >
                   <h1
                     className={`font-semibold tracking-wide whitespace-nowrap transition-all duration-300 ${
-                      isHeaderCollapsed ? "text-xs" : "text-sm sm:text-base"
+                      isHeaderCollapsed
+                        ? "text-[11px] sm:text-xs"
+                        : hasModel
+                          ? "text-sm sm:text-[15px]"
+                          : "text-[15px] sm:text-base"
                     }`}
                     style={{
                       backgroundImage: heizlastGradientCss("to right"),
