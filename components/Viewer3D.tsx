@@ -20,6 +20,7 @@ import {
   EXPLODE_LEFT_FACTOR,
   floorWorldYBounds,
 } from "@/lib/clipSlice";
+import { roomPassesFilter } from "@/lib/roomFilter";
 import type { RenderMode, Room } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
 import { useModelScene } from "./ModelSceneContext";
@@ -35,6 +36,10 @@ export type Viewer3DHandle = {
     duration?: number,
   ) => Promise<void>;
   fitVisible: () => void;
+  /** Search-only: fly camera to frame a room mesh (does zoom). */
+  flyToRoom: (roomId: string) => Promise<void>;
+  /** Force a render then return canvas PNG data URL. */
+  captureViewport: () => string | null;
 };
 
 type Props = {
@@ -308,6 +313,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const sliceProgress = useAppStore((s) => s.sliceProgress);
   const floors = useAppStore((s) => s.floors);
   const selectedRoomId = useAppStore((s) => s.selectedRoomId);
+  const activeFilter = useAppStore((s) => s.activeFilter);
   const selectedElement = useAppStore((s) => s.selectedElement);
   const setHoveredRoom = useAppStore((s) => s.setHoveredRoom);
   const setSelectedRoomId = useAppStore((s) => s.setSelectedRoomId);
@@ -367,6 +373,29 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       );
     },
     fitVisible: fitToVisible,
+    flyToRoom: async (roomId: string) => {
+      const camera = cameraRef.current;
+      const controls = controlsRef.current;
+      const mesh = roomMeshById.current.get(roomId);
+      if (!camera || !controls || !mesh) return;
+      mesh.visible = true;
+      const box = new THREE.Box3().setFromObject(mesh);
+      if (box.isEmpty()) return;
+      const { position, target } = frameBoundingBox(box, camera, 1.55);
+      await flyTo(camera, controls, position, target, 900);
+    },
+    captureViewport: () => {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const camera = cameraRef.current;
+      if (!renderer || !scene || !camera) return null;
+      renderer.render(scene, camera);
+      try {
+        return renderer.domElement.toDataURL("image/png");
+      } catch {
+        return null;
+      }
+    },
   }));
 
   useEffect(() => {
@@ -386,6 +415,8 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
       alpha: false,
       powerPreference: "high-performance",
       stencil: true,
+      // Needed so PDF export can read pixels after render()
+      preserveDrawingBuffer: true,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1035,17 +1066,30 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     const presentation = useAppStore.getState().isPresentationView;
     const palette = useAppStore.getState().activeColorPalette;
 
+    const filter = useAppStore.getState().activeFilter;
+    const byId = new Map(
+      (rooms.length ? rooms : roomsFromStore).map((r) => [r.id, r]),
+    );
+
     for (const [id, mesh] of roomMeshById.current) {
       clearSelectionOutlines(mesh);
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const isSel =
         id === selectedRoomId || mesh.userData.expressId === selectedExpress;
-      mat.opacity = isSel ? Math.min(0.95, baseOpacity + 0.15) : baseOpacity;
+      const room = byId.get(id);
+      const passes =
+        !filter || !room || roomPassesFilter(room, filter);
+      // Non-matches stay visible but heavily faded (filter within floor scope)
+      mat.opacity = !passes
+        ? 0.1
+        : isSel
+          ? Math.min(0.95, baseOpacity + 0.15)
+          : baseOpacity;
       if (!lightMode) {
         mat.emissive.setHex(0x000000);
         mat.emissiveIntensity = 0;
       }
-      if (isSel) {
+      if (isSel && passes) {
         if (presentation) {
           const hex =
             (mesh.userData.colorHex as string | undefined) ??
@@ -1090,6 +1134,9 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     lighting.transparency,
     isPresentationView,
     activeColorPalette,
+    activeFilter,
+    rooms,
+    roomsFromStore,
   ]);
 
   // Pointer: select only — no camera flyTo

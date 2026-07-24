@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { heizlastToColor, temperatureToColor } from "@/lib/colorMapping";
+import { roomPassesFilter } from "@/lib/roomFilter";
 import { frameBoundingBoxOrtho } from "@/lib/flyTo";
 import type { Room } from "@/lib/types";
 import { useAppStore } from "@/store/useAppStore";
@@ -38,6 +39,7 @@ export default function Plan2D({ onPointerMove, className }: Props) {
   const colorMode = useAppStore((s) => s.colorMode);
   const selectedFloor = useAppStore((s) => s.selectedFloor);
   const selectedRoomId = useAppStore((s) => s.selectedRoomId);
+  const activeFilter = useAppStore((s) => s.activeFilter);
   const setHoveredRoom = useAppStore((s) => s.setHoveredRoom);
   const setSelectedRoomId = useAppStore((s) => s.setSelectedRoomId);
   const roomsFromStore = useAppStore((s) => s.rooms);
@@ -242,12 +244,19 @@ export default function Plan2D({ onPointerMove, className }: Props) {
   }, [selectedFloor, shellGroup, rooms]);
 
   useEffect(() => {
+    const byId = new Map(
+      (rooms.length ? rooms : roomsFromStore).map((r) => [r.id, r]),
+    );
     for (const [id, mesh] of roomMeshById.current) {
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.opacity = id === selectedRoomId ? 0.85 : 0.6;
-      mat.emissive.setHex(id === selectedRoomId ? 0x333333 : 0x000000);
+      const room = byId.get(id);
+      const passes =
+        !activeFilter || !room || roomPassesFilter(room, activeFilter);
+      const isSel = id === selectedRoomId;
+      mat.opacity = !passes ? 0.12 : isSel ? 0.85 : 0.6;
+      mat.emissive.setHex(isSel && passes ? 0x333333 : 0x000000);
     }
-  }, [selectedRoomId]);
+  }, [selectedRoomId, activeFilter, rooms, roomsFromStore]);
 
   useEffect(() => {
     const canvas = rendererRef.current?.domElement;

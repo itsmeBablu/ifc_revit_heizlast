@@ -3,14 +3,16 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BsFullscreen, BsFullscreenExit } from "react-icons/bs";
+import { MdZoomInMap } from "react-icons/md";
 import { VscSymbolColor } from "react-icons/vsc";
-import { HiOutlineSquare3Stack3D } from "react-icons/hi2";
 import { CiLight } from "react-icons/ci";
 import { LiaStreetViewSolid } from "react-icons/lia";
 import { LuPresentation } from "react-icons/lu";
+import { IoSearchOutline } from "react-icons/io5";
 import type { RenderMode } from "@/lib/types";
 import { SCENE_BACKGROUND_PRESETS, useAppStore } from "@/store/useAppStore";
 import GlassPanel from "./GlassPanel";
+import SearchFilterPanel from "./SearchFilterPanel";
 import Slider from "./ui/Slider";
 import type { Viewer3DHandle } from "./Viewer3D";
 import type { RefObject } from "react";
@@ -28,7 +30,7 @@ type Props = {
   targetRef: RefObject<HTMLElement | null>;
 };
 
-type Panel = "shade" | "light" | "save" | null;
+type Panel = "shade" | "light" | "save" | "search" | null;
 
 function SliderRow({
   label,
@@ -155,20 +157,24 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const activeModelId = useAppStore((s) => s.activeModelId);
   const isPresentationView = useAppStore((s) => s.isPresentationView);
   const setPresentationView = useAppStore((s) => s.setPresentationView);
+  const activeFilter = useAppStore((s) => s.activeFilter);
 
   const [panel, setPanel] = useState<Panel>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [shadePos, setShadePos] = useState({ bottom: 0, left: 0 });
   const [lightPos, setLightPos] = useState({ bottom: 0, left: 0 });
   const [savePos, setSavePos] = useState({ bottom: 0, left: 0 });
+  const [searchPos, setSearchPos] = useState({ bottom: 0, left: 0 });
   const [viewName, setViewName] = useState("");
 
   const shadeBtnRef = useRef<HTMLButtonElement>(null);
   const lightBtnRef = useRef<HTMLButtonElement>(null);
   const saveBtnRef = useRef<HTMLButtonElement>(null);
+  const searchBtnRef = useRef<HTMLButtonElement>(null);
   const shadeMenuRef = useRef<HTMLDivElement>(null);
   const lightMenuRef = useRef<HTMLDivElement>(null);
   const saveMenuRef = useRef<HTMLDivElement>(null);
+  const searchMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onFs = () => {
@@ -225,6 +231,20 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
     return () => window.removeEventListener("resize", update);
   }, [panel]);
 
+  useLayoutEffect(() => {
+    if (panel !== "search" || !searchBtnRef.current) return;
+    const update = () => {
+      const r = searchBtnRef.current!.getBoundingClientRect();
+      setSearchPos({
+        bottom: window.innerHeight - r.top + 10,
+        left: r.left + r.width / 2,
+      });
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [panel]);
+
   useEffect(() => {
     if (!panel) return;
     const onDoc = (e: MouseEvent) => {
@@ -240,6 +260,10 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
       if (panel === "save") {
         if (saveMenuRef.current?.contains(t)) return;
         if (saveBtnRef.current?.contains(t)) return;
+      }
+      if (panel === "search") {
+        if (searchMenuRef.current?.contains(t)) return;
+        if (searchBtnRef.current?.contains(t)) return;
       }
       setPanel(null);
     };
@@ -303,6 +327,12 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
   const glassPopover =
     "fixed z-[80] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/40 bg-white/70 shadow-lg backdrop-blur-xl";
 
+  // Presentation uses fullscreen on the viewer root — menus must portal inside it
+  const portalRoot =
+    (typeof document !== "undefined"
+      ? ((document.fullscreenElement as HTMLElement | null) ?? document.body)
+      : null) ?? document.body;
+
   const shadeMenu =
     panel === "shade" &&
     typeof document !== "undefined" &&
@@ -332,7 +362,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
           </button>
         ))}
       </div>,
-      document.body,
+      portalRoot,
     );
 
   const lightMenu =
@@ -403,7 +433,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
           </div>
         </div>
       </div>,
-      document.body,
+      portalRoot,
     );
 
   const saveMenu =
@@ -441,7 +471,27 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
           Save
         </button>
       </div>,
-      document.body,
+      portalRoot,
+    );
+
+  const searchMenu =
+    panel === "search" &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <div
+        ref={searchMenuRef}
+        className={`${glassPopover} w-[min(340px,calc(100vw-1.5rem))] p-2`}
+        style={{ bottom: searchPos.bottom, left: searchPos.left }}
+        role="dialog"
+        aria-label="Search and filter"
+      >
+        <SearchFilterPanel
+          viewerRef={viewerRef}
+          open={panel === "search"}
+          onClose={() => setPanel(null)}
+        />
+      </div>,
+      portalRoot,
     );
 
   return (
@@ -463,7 +513,27 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
                 aria-label="Fit model to screen"
                 onClick={() => viewerRef.current?.fitVisible()}
               >
-                <HiOutlineSquare3Stack3D className="h-5 w-5" />
+                <MdZoomInMap className="h-5 w-5" />
+              </button>
+            </ToolTipWrap>
+
+            <ToolTipWrap
+              label="Search & filter"
+              hint="Find a room by name or number, or filter by Heizlast and temperature"
+            >
+              <button
+                ref={searchBtnRef}
+                type="button"
+                className={
+                  panel === "search" || activeFilter ? btnActive : btnIdle
+                }
+                aria-label="Search and filter rooms"
+                aria-expanded={panel === "search"}
+                onClick={() =>
+                  setPanel((p) => (p === "search" ? null : "search"))
+                }
+              >
+                <IoSearchOutline className="h-5 w-5" />
               </button>
             </ToolTipWrap>
 
@@ -505,7 +575,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
 
             <ToolTipWrap
               label="Save view"
-              hint="Save this camera angle so you can come back to it later"
+              hint="Save this camera angle so you can come back to it later (works in presentation too)"
             >
               <button
                 ref={saveBtnRef}
@@ -582,6 +652,7 @@ export default function ViewerToolbar({ viewerRef, targetRef }: Props) {
       {shadeMenu}
       {lightMenu}
       {saveMenu}
+      {searchMenu}
     </>
   );
 }

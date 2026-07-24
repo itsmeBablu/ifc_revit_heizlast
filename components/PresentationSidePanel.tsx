@@ -135,7 +135,7 @@ export default function PresentationSidePanel() {
                     No rooms on this floor.
                   </p>
                 ) : (
-                  <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5 pb-1">
+                  <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto thin-scroll pr-0.5 pb-1">
                     {floorRooms.map((room) => {
                       const hex = heizlastToColor(
                         room.heatLoad,

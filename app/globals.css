@@ -98,3 +98,23 @@ body {
 .duration-350 {
   transition-duration: 350ms;
 }
+
+/* Thin scrollbars app-wide */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(113, 113, 122, 0.35) transparent;
+}
+*::-webkit-scrollbar {
+  width: 0.5px;
+  height: 0.5px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(113, 113, 122, 0.35);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(82, 82, 91, 0.5);
+}

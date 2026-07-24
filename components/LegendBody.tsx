@@ -14,7 +14,7 @@ import { useAppStore } from "@/store/useAppStore";
 import LegendRangeInput from "./LegendRangeInput";
 
 type Props = {
-  /** Extra top padding when ViewCube sits above (desktop legend). */
+  /** Kept for callers; legend uses compact top padding either way. */
   paddedTop?: boolean;
   className?: string;
 };
@@ -109,7 +109,7 @@ export default function LegendBody({
   return (
     <div className={`text-zinc-800 ${className}`} ref={pickerRef}>
       <section
-        className={`space-y-2.5 px-3 pb-3 ${paddedTop ? "pt-14" : "pt-3"}`}
+        className={`space-y-2.5 px-3 pb-3 ${paddedTop ? "pt-3" : "pt-2.5"}`}
       >
         <p className={heading.panel}>Legend</p>
         <div
@@ -126,9 +126,9 @@ export default function LegendBody({
             <button
               type="button"
               onClick={() => setColorMode("heizlast")}
-              className="min-w-0 flex-1 px-2 py-1.5 text-left text-xs font-medium"
+              className="min-w-0 flex-1 whitespace-nowrap px-2 py-1.5 text-left text-xs font-medium"
             >
-              Heizlast
+              Heizlast W/m²
             </button>
             <button
               type="button"
@@ -199,21 +199,9 @@ export default function LegendBody({
               </div>
             </button>
             <div className="flex items-end justify-between gap-0.5 text-[10px] tabular-nums text-zinc-500">
-              {heizlastRange.map((t, i) => (
-                <span
-                  key={t}
-                  className={`min-w-0 truncate text-center ${
-                    i === heizlastRange.length - 1
-                      ? "flex items-baseline justify-end gap-0.5"
-                      : ""
-                  }`}
-                >
+              {heizlastRange.map((t) => (
+                <span key={t} className="min-w-0 truncate text-center">
                   {t}
-                  {i === heizlastRange.length - 1 ? (
-                    <span className="shrink-0 text-[9px] text-zinc-400">
-                      W/m²
-                    </span>
-                  ) : null}
                 </span>
               ))}
             </div>

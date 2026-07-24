@@ -134,6 +134,12 @@ type AppState = {
   presentationFloorId: string | null;
   /** When true, show floor picker + room list in presentation panel. */
   presentationRoomsOpen: boolean;
+  /** Room filter for search/filter bar — null means no filter. */
+  activeFilter: {
+    minHeat?: number;
+    maxHeat?: number;
+    temperatures?: number[];
+  } | null;
   sliceProgress: number;
   isLoadingModel: boolean;
   loadError: string | null;
@@ -172,6 +178,13 @@ type AppState = {
   setPresentationView: (active: boolean) => void;
   setPresentationFloorId: (floorId: string | null) => void;
   setPresentationRoomsOpen: (open: boolean) => void;
+  setActiveFilter: (
+    filter: {
+      minHeat?: number;
+      maxHeat?: number;
+      temperatures?: number[];
+    } | null,
+  ) => void;
   setIsLoadingModel: (loading: boolean) => void;
   setLoadError: (error: string | null) => void;
   setLoadProgress: (progress: number, message?: string) => void;
@@ -277,6 +290,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   presentationPrevFloor: null,
   presentationFloorId: null,
   presentationRoomsOpen: false,
+  activeFilter: null,
   sliceProgress: 0.5,
   isLoadingModel: false,
   loadError: null,
@@ -412,6 +426,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ presentationRoomsOpen: true });
     }
   },
+  setActiveFilter: (filter) => set({ activeFilter: filter }),
   setIsLoadingModel: (loading) => set({ isLoadingModel: loading }),
   setLoadError: (error) => set({ loadError: error }),
   setLoadProgress: (progress, message) =>
@@ -476,6 +491,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       presentationPrevFloor: null,
       presentationFloorId: null,
       presentationRoomsOpen: false,
+      activeFilter: null,
     }),
 }));
 
