@@ -46,10 +46,12 @@ function roomColorHex(
   room: Room,
   mode: "heizlast" | "temperature",
   palette?: string,
+  heizlastRange?: number[],
+  temperatureRange?: number[],
 ): string {
   return mode === "heizlast"
-    ? heizlastToColor(room.heatLoad, palette)
-    : temperatureToColor(room.temperature, palette);
+    ? heizlastToColor(room.heatLoad, palette, heizlastRange)
+    : temperatureToColor(room.temperature, palette, temperatureRange);
 }
 
 /** Per-color material templates — always return a CLONE so rooms never share GPU state. */
@@ -296,6 +298,8 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
   const { shellGroup, rooms } = useModelScene();
   const colorMode = useAppStore((s) => s.colorMode);
   const activeColorPalette = useAppStore((s) => s.activeColorPalette);
+  const heizlastRange = useAppStore((s) => s.heizlastRange);
+  const temperatureRange = useAppStore((s) => s.temperatureRange);
   const renderMode = useAppStore((s) => s.renderMode);
   const lighting = useAppStore((s) => s.lighting);
   const sceneBackground = useAppStore((s) => s.sceneBackground);
@@ -568,7 +572,13 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     let logged = 0;
     for (const room of sourceRooms) {
       if (!room.geometry || room.geometry.attributes.position == null) continue;
-      const hex = roomColorHex(room, colorMode, activeColorPalette);
+      const hex = roomColorHex(
+        room,
+        colorMode,
+        activeColorPalette,
+        heizlastRange,
+        temperatureRange,
+      );
       if (logged < 8) {
         debugLog(
           "Viewer3D",
@@ -616,7 +626,13 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     for (const [id, mesh] of roomMeshById.current) {
       const room = byId.get(id);
       if (!room) continue;
-      const hex = roomColorHex(room, colorMode, activeColorPalette);
+      const hex = roomColorHex(
+        room,
+        colorMode,
+        activeColorPalette,
+        heizlastRange,
+        temperatureRange,
+      );
       const prev = mesh.material;
       mesh.material = materialCacheRef.current.get(hex);
       mesh.userData.colorHex = hex;
@@ -634,7 +650,7 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     );
     clipRef.current?.rebindMaterials();
     clipRef.current?.rebuildCaps();
-  }, [colorMode, activeColorPalette, rooms, roomsFromStore, renderMode, lighting]);
+  }, [colorMode, activeColorPalette, heizlastRange, temperatureRange, rooms, roomsFromStore, renderMode, lighting]);
 
   // Render mode + lighting
   useEffect(() => {
@@ -759,6 +775,8 @@ const Viewer3D = forwardRef<Viewer3DHandle, Props>(function Viewer3D(
     selectedFloor,
     colorMode,
     activeColorPalette,
+    heizlastRange,
+    temperatureRange,
     floors,
     shellGroup,
     rooms,

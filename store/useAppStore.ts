@@ -2,6 +2,11 @@
 
 import { create } from "zustand";
 import type { ColorPaletteId } from "@/lib/colorMapping";
+import {
+  DEFAULT_HEIZLAST_RANGE,
+  DEFAULT_TEMPERATURE_RANGE,
+  parseLegendRange,
+} from "@/lib/colorMapping";
 import type {
   ColorMode,
   Floor,
@@ -16,6 +21,8 @@ const LEFT_PANEL_KEY = "ifc-viewer:leftPanelOpen";
 const RIGHT_PANEL_KEY = "ifc-viewer:rightPanelOpen";
 const PALETTE_KEY = "ifc-viewer:colorPalette";
 const BG_KEY = "ifc-viewer:sceneBackground";
+const HEIZLAST_RANGE_KEY = "ifc-viewer:heizlastRange";
+const TEMP_RANGE_KEY = "ifc-viewer:temperatureRange";
 const savedViewsKey = (modelId: string) => `ifc-viewer:savedViews:${modelId}`;
 
 /** Preset 3D viewport background colors (environment feel). */
@@ -106,6 +113,10 @@ type AppState = {
   selectedElement: SelectedElement | null;
   colorMode: ColorMode;
   activeColorPalette: ColorPaletteId;
+  /** Legend Heizlast stop values (6–8). */
+  heizlastRange: number[];
+  /** Legend temperature stop values (6–8). */
+  temperatureRange: number[];
   renderMode: RenderMode;
   lighting: {
     transparency: number;
@@ -145,6 +156,8 @@ type AppState = {
   setSelectedElement: (el: SelectedElement | null) => void;
   setColorMode: (mode: ColorMode) => void;
   setActiveColorPalette: (id: ColorPaletteId) => void;
+  setHeizlastRange: (values: number[]) => void;
+  setTemperatureRange: (values: number[]) => void;
   setRenderMode: (mode: RenderMode) => void;
   setLighting: (
     partial: Partial<{
@@ -208,6 +221,26 @@ function initialPalette(): ColorPaletteId {
   return "standard";
 }
 
+function initialRange(key: string, fallback: number[]): number[] {
+  if (typeof window === "undefined") return [...fallback];
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [...fallback];
+    return parseLegendRange(raw) ?? [...fallback];
+  } catch {
+    return [...fallback];
+  }
+}
+
+function persistRange(key: string, values: number[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, values.join(","));
+  } catch {
+    // ignore
+  }
+}
+
 function initialBackground(): string {
   if (typeof window === "undefined") return DEFAULT_BG;
   try {
@@ -230,6 +263,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedElement: null,
   colorMode: "heizlast",
   activeColorPalette: initialPalette(),
+  heizlastRange: initialRange(HEIZLAST_RANGE_KEY, DEFAULT_HEIZLAST_RANGE),
+  temperatureRange: initialRange(TEMP_RANGE_KEY, DEFAULT_TEMPERATURE_RANGE),
   renderMode: "fullColor",
   lighting: {
     transparency: 0.7,
@@ -289,6 +324,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
     set({ activeColorPalette: id });
+  },
+  setHeizlastRange: (values) => {
+    const parsed = parseLegendRange(values.join(","));
+    if (!parsed) return;
+    persistRange(HEIZLAST_RANGE_KEY, parsed);
+    set({ heizlastRange: parsed });
+  },
+  setTemperatureRange: (values) => {
+    const parsed = parseLegendRange(values.join(","));
+    if (!parsed) return;
+    persistRange(TEMP_RANGE_KEY, parsed);
+    set({ temperatureRange: parsed });
   },
   setRenderMode: (mode) => set({ renderMode: mode }),
   setLighting: (partial) =>

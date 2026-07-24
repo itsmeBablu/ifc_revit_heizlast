@@ -70,6 +70,7 @@ function ToolTipWrap({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const [suppressed, setSuppressed] = useState(false);
   const [pos, setPos] = useState({ bottom: 0, left: 0 });
 
   const updatePos = () => {
@@ -98,15 +99,24 @@ function ToolTipWrap({
       ref={wrapRef}
       className="relative flex items-center justify-center"
       onMouseEnter={() => {
+        if (suppressed) return;
         updatePos();
         setOpen(true);
       }}
-      onMouseLeave={() => setOpen(false)}
+      onMouseLeave={() => {
+        setOpen(false);
+        setSuppressed(false);
+      }}
       onFocus={() => {
+        if (suppressed) return;
         updatePos();
         setOpen(true);
       }}
       onBlur={() => setOpen(false)}
+      onClick={() => {
+        setOpen(false);
+        setSuppressed(true);
+      }}
     >
       {children}
       {open &&

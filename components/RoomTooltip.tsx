@@ -18,9 +18,23 @@ type Props = {
   anchor?: { left: number; top: number } | null;
 };
 
-function RoomInfoBody({ room, palette }: { room: Room; palette: string }) {
-  const heatColor = heizlastToColor(room.heatLoad, palette);
-  const tempColor = temperatureToColor(room.temperature, palette);
+function RoomInfoBody({
+  room,
+  palette,
+  heizlastRange,
+  temperatureRange,
+}: {
+  room: Room;
+  palette: string;
+  heizlastRange: number[];
+  temperatureRange: number[];
+}) {
+  const heatColor = heizlastToColor(room.heatLoad, palette, heizlastRange);
+  const tempColor = temperatureToColor(
+    room.temperature,
+    palette,
+    temperatureRange,
+  );
   const absHeizlast = room.heizlast;
 
   return (
@@ -81,6 +95,8 @@ export default function RoomTooltip({
 }: Props) {
   const hoveredRoom = useAppStore((s) => s.hoveredRoom);
   const palette = useAppStore((s) => s.activeColorPalette);
+  const heizlastRange = useAppStore((s) => s.heizlastRange);
+  const temperatureRange = useAppStore((s) => s.temperatureRange);
 
   const room = roomProp ?? hoveredRoom;
   if (!room) return null;
@@ -128,7 +144,12 @@ export default function RoomTooltip({
         wrapperClassName={`w-full ${opaque ? "room-tooltip--opaque" : ""}`}
       >
         <div className={opaque ? "rounded-3xl bg-white/90" : undefined}>
-          <RoomInfoBody room={room} palette={palette} />
+          <RoomInfoBody
+            room={room}
+            palette={palette}
+            heizlastRange={heizlastRange}
+            temperatureRange={temperatureRange}
+          />
         </div>
       </GlassPanel>
     </div>

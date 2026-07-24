@@ -172,6 +172,108 @@ export function temperatureStopsFor(paletteId?: ColorPaletteId | string): ColorS
   return getPalette(paletteId).temperatureStops;
 }
 
+export const DEFAULT_HEIZLAST_RANGE = [0, 10, 20, 30, 40, 50];
+export const DEFAULT_TEMPERATURE_RANGE = [0, 6, 15, 18, 20, 24];
+export const MIN_LEGEND_STOPS = 6;
+export const MAX_LEGEND_STOPS = 8;
+
+/** Built-in Heizlast range presets for the legend dropdown. */
+export const HEIZLAST_RANGE_PRESETS: { id: string; label: string; values: number[] }[] = [
+  { id: "fine", label: "0, 5, 15, 20, 25, 30", values: [0, 5, 15, 20, 25, 30] },
+  { id: "std", label: "0, 10, 20, 30, 40, 50", values: [0, 10, 20, 30, 40, 50] },
+  { id: "wide", label: "0, 15, 25, 35, 45, 55", values: [0, 15, 25, 35, 45, 55] },
+];
+
+/**
+ * Pick the tightest Heizlast preset that covers the model's heat-load values.
+ * Uses ~95th percentile so a few outliers don't force the widest scale.
+ */
+export function pickHeizlastRangeFromLoads(heatLoads: number[]): number[] {
+  const vals = heatLoads.filter((v) => Number.isFinite(v) && v >= 0);
+  if (!vals.length) return [...DEFAULT_HEIZLAST_RANGE];
+
+  const sorted = [...vals].sort((a, b) => a - b);
+  const max = sorted[sorted.length - 1];
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+  // Cover typical rooms; still respect absolute max with a little headroom
+  const target = Math.max(p95, max * 0.9);
+
+  const covering = HEIZLAST_RANGE_PRESETS.map((p) => ({
+    p,
+    max: p.values[p.values.length - 1]!,
+  }))
+    .filter((x) => x.max >= target)
+    .sort((a, b) => a.max - b.max);
+
+  if (covering.length) return [...covering[0]!.p.values];
+
+  const widest = HEIZLAST_RANGE_PRESETS.reduce((best, p) =>
+    p.values[p.values.length - 1]! > best.values[best.values.length - 1]!
+      ? p
+      : best,
+  );
+  return [...widest.values];
+}
+
+/** Parse "0, 10, 20, 30, 40, 50" → sorted unique numbers (6–8). */
+export function parseLegendRange(input: string): number[] | null {
+  const parts = input
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length < MIN_LEGEND_STOPS || parts.length > MAX_LEGEND_STOPS) {
+    return null;
+  }
+  const nums = parts.map(Number);
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  const sorted = [...new Set(nums)].sort((a, b) => a - b);
+  if (
+    sorted.length < MIN_LEGEND_STOPS ||
+    sorted.length > MAX_LEGEND_STOPS
+  ) {
+    return null;
+  }
+  return sorted;
+}
+
+export function formatLegendRange(values: number[]): string {
+  return values.join(", ");
+}
+
+function sampleColors(colors: string[], t: number): string {
+  if (!colors.length) return "#888888";
+  if (colors.length === 1) return colors[0];
+  const clamped = Math.max(0, Math.min(1, t));
+  const scaled = clamped * (colors.length - 1);
+  const i = Math.floor(scaled);
+  const f = scaled - i;
+  if (i >= colors.length - 1) return colors[colors.length - 1];
+  return rgbToHex(lerpRgb(hexToRgb(colors[i]), hexToRgb(colors[i + 1]), f));
+}
+
+/** Map a custom value range onto palette colors (6–8 stops). */
+export function resolveStopsForRange(
+  paletteStops: ColorStop[],
+  range: number[],
+): ColorStop[] {
+  const values =
+    range.length >= MIN_LEGEND_STOPS
+      ? range
+      : DEFAULT_HEIZLAST_RANGE;
+  const colors = paletteStops
+    .filter((s) => Number.isFinite(s.value))
+    .map((s) => s.color);
+  const unique: string[] = [];
+  for (const c of colors) {
+    if (unique[unique.length - 1] !== c) unique.push(c);
+  }
+  const src = unique.length ? unique : ["#0050FF", "#FFFFB4", "#DC0000"];
+  return values.map((value, i) => ({
+    value,
+    color: sampleColors(src, i / Math.max(1, values.length - 1)),
+  }));
+}
+
 export const HEIZLAST_GRADIENT_STOPS = STANDARD_HEIZLAST.filter((s) =>
   Number.isFinite(s.value),
 );
@@ -182,19 +284,19 @@ export const HEIZLAST_GRADIENT_STOPS = STANDARD_HEIZLAST.filter((s) =>
 export function heizlastToColor(
   value: number,
   paletteId?: ColorPaletteId | string,
+  range: number[] = DEFAULT_HEIZLAST_RANGE,
 ): string {
-  const stops = heizlastStopsFor(paletteId);
-  if (!Number.isFinite(value) || value < 0) {
+  const stops = resolveStopsForRange(heizlastStopsFor(paletteId), range);
+  if (!Number.isFinite(value) || value < stops[0].value) {
     return stops[0].color;
   }
-  if (value >= 50) {
+  if (value >= stops[stops.length - 1].value) {
     return stops[stops.length - 1].color;
   }
 
-  const finite = stops.filter((s) => Number.isFinite(s.value));
-  for (let i = 0; i < finite.length - 1; i++) {
-    const a = finite[i];
-    const b = finite[i + 1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i];
+    const b = stops[i + 1];
     if (value >= a.value && value <= b.value) {
       const span = b.value - a.value;
       const t = span === 0 ? 0 : (value - a.value) / span;
@@ -202,26 +304,17 @@ export function heizlastToColor(
     }
   }
 
-  return finite[finite.length - 1].color;
+  return stops[stops.length - 1].color;
 }
 
-/** CSS linear-gradient matching heizlast anchors for the active palette. */
+/** CSS linear-gradient matching heizlast anchors for the active palette/range. */
 export function heizlastGradientCss(
   direction = "to right",
   paletteId?: ColorPaletteId | string,
+  range: number[] = DEFAULT_HEIZLAST_RANGE,
 ): string {
-  const stops = heizlastStopsFor(paletteId);
-  const finite = stops.filter((s) => Number.isFinite(s.value));
-  const colors = [
-    stops[0].color,
-    ...finite.map((s) => s.color),
-    stops[stops.length - 1].color,
-  ];
-  const unique: string[] = [];
-  for (const c of colors) {
-    if (unique[unique.length - 1] !== c) unique.push(c);
-  }
-  return `linear-gradient(${direction}, ${unique.join(", ")})`;
+  const stops = resolveStopsForRange(heizlastStopsFor(paletteId), range);
+  return `linear-gradient(${direction}, ${stops.map((s) => s.color).join(", ")})`;
 }
 
 /**
@@ -230,8 +323,9 @@ export function heizlastGradientCss(
 export function temperatureToColor(
   value: number,
   paletteId?: ColorPaletteId | string,
+  range: number[] = DEFAULT_TEMPERATURE_RANGE,
 ): string {
-  const stops = temperatureStopsFor(paletteId);
+  const stops = resolveStopsForRange(temperatureStopsFor(paletteId), range);
   if (!Number.isFinite(value)) {
     return stops[2]?.color ?? stops[0].color;
   }
@@ -249,4 +343,12 @@ export function temperatureToColor(
   }
 
   return best.color;
+}
+
+/** Temperature chip stops for the legend (custom range + palette colors). */
+export function temperatureLegendStops(
+  paletteId?: ColorPaletteId | string,
+  range: number[] = DEFAULT_TEMPERATURE_RANGE,
+): ColorStop[] {
+  return resolveStopsForRange(temperatureStopsFor(paletteId), range);
 }

@@ -25,11 +25,10 @@ import LoadIfcButton from "./LoadIfcButton";
 import FloorsPanel from "./FloorsPanel";
 import LegendPanel from "./LegendPanel";
 import PresentationSidePanel from "./PresentationSidePanel";
-import DebugPanel from "./DebugPanel";
 import GlassPanel from "./GlassPanel";
 import { GlassButton, IconAlert } from "./ui";
 import ViewerToolbar from "./ViewerToolbar";
-import { heizlastGradientCss } from "@/lib/colorMapping";
+import { heizlastGradientCss, pickHeizlastRangeFromLoads } from "@/lib/colorMapping";
 
 type LoadSource =
   | { kind: "registry"; modelId: string }
@@ -43,6 +42,8 @@ export default function ViewerApp() {
   const [shellGroup, setShellGroup] = useState<Group | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [isDesktop, setIsDesktop] = useState(true);
+  const [isDraggingIfc, setIsDraggingIfc] = useState(false);
+  const dragDepthRef = useRef(0);
 
   const rooms = useAppStore((s) => s.rooms);
   const isLoadingModel = useAppStore((s) => s.isLoadingModel);
@@ -57,10 +58,12 @@ export default function ViewerApp() {
   const selectedRoomId = useAppStore((s) => s.selectedRoomId);
   const hoveredRoom = useAppStore((s) => s.hoveredRoom);
   const isPresentationView = useAppStore((s) => s.isPresentationView);
+  const presentationRoomsOpen = useAppStore((s) => s.presentationRoomsOpen);
 
   const setActiveModelId = useAppStore((s) => s.setActiveModelId);
   const setFloors = useAppStore((s) => s.setFloors);
   const setRooms = useAppStore((s) => s.setRooms);
+  const setHeizlastRange = useAppStore((s) => s.setHeizlastRange);
   const setIsLoadingModel = useAppStore((s) => s.setIsLoadingModel);
   const setLoadError = useAppStore((s) => s.setLoadError);
   const setLoadProgress = useAppStore((s) => s.setLoadProgress);
@@ -149,6 +152,9 @@ export default function ViewerApp() {
         loadedRef.current = result;
         setFloors(result.floors);
         setRooms(result.rooms);
+        setHeizlastRange(
+          pickHeizlastRangeFromLoads(result.rooms.map((r) => r.heatLoad)),
+        );
         setShellGroup(result.shellGroup);
         if (source.kind === "registry") persistModelId(id);
         debugLog(
@@ -175,6 +181,7 @@ export default function ViewerApp() {
       setLoadError,
       setLoadProgress,
       setRooms,
+      setHeizlastRange,
     ],
   );
 
@@ -198,6 +205,57 @@ export default function ViewerApp() {
       void runLoad({ kind: "file", id, name: file.name, file });
     },
     [runLoad],
+  );
+
+  const isIfcFile = useCallback((file: File) => {
+    const name = file.name.toLowerCase();
+    return (
+      name.endsWith(".ifc") ||
+      file.type === "application/x-step" ||
+      file.type === "application/octet-stream"
+    );
+  }, []);
+
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    dragDepthRef.current += 1;
+    setIsDraggingIfc(true);
+  }, []);
+
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingIfc(false);
+  }, []);
+
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragDepthRef.current = 0;
+      setIsDraggingIfc(false);
+      if (isLoadingModel) return;
+      const files = e.dataTransfer?.files;
+      if (!files?.length) return;
+      const file =
+        [...files].find((f) => isIfcFile(f)) ??
+        [...files].find((f) => f.name.toLowerCase().endsWith(".ifc"));
+      if (!file) {
+        debugLog("ViewerApp", "drop ignored — not an IFC file", "warn");
+        return;
+      }
+      handleFile(file);
+    },
+    [handleFile, isIfcFile, isLoadingModel],
   );
 
   const handleRetry = useCallback(() => {
@@ -238,6 +296,10 @@ export default function ViewerApp() {
       <div
         ref={rootRef}
         className="relative h-dvh w-dvw overflow-hidden text-zinc-900"
+        onDragEnter={onDragEnter}
+        onDragLeave={onDragLeave}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
       >
         <div className="fixed inset-0 z-0">
           <Viewer3D
@@ -246,6 +308,25 @@ export default function ViewerApp() {
             className="h-full w-full"
           />
         </div>
+
+        {isDraggingIfc && !isLoadingModel && (
+          <div className="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center bg-zinc-900/35 p-6 backdrop-blur-[2px]">
+            <GlassPanel
+              variant="panel"
+              zIndex={100}
+              wrapperClassName="w-full max-w-md"
+            >
+              <div className="px-6 py-8 text-center">
+                <p className="text-base font-semibold tracking-wide text-zinc-900">
+                  Drop IFC to load
+                </p>
+                <p className="mt-1.5 text-xs text-zinc-500">
+                  Release to open the model in the viewer
+                </p>
+              </div>
+            </GlassPanel>
+          </div>
+        )}
 
         {/* Header: 50% default / 25% collapsed */}
         <div
@@ -419,7 +500,6 @@ export default function ViewerApp() {
             />
           );
         })()}
-        <DebugPanel />
         <ViewerToolbar viewerRef={viewerRef} targetRef={rootRef} />
 
         {/* LEFT — Floors & Rooms (hidden during Presentation View) */}
@@ -494,7 +574,9 @@ export default function ViewerApp() {
         {isDesktop && (
           <aside
             className={`fixed top-36 right-4 z-[35] flex w-[min(280px,calc(100vw-2rem))] flex-col overflow-hidden ${
-              isPresentationView ? "bottom-20 pb-1" : ""
+              isPresentationView && presentationRoomsOpen
+                ? "bottom-20 pb-1"
+                : ""
             } ${motion.sidebar} ${
               rightPanelOpen
                 ? "pointer-events-auto translate-x-0 opacity-100"
@@ -505,11 +587,13 @@ export default function ViewerApp() {
             <GlassPanel
               variant="panel"
               zIndex={35}
-              fill={isPresentationView}
+              fill={isPresentationView && presentationRoomsOpen}
               wrapperClassName={`relative overflow-hidden ${
-                isPresentationView
+                isPresentationView && presentationRoomsOpen
                   ? "mb-2 flex min-h-0 flex-1 flex-col"
-                  : ""
+                  : isPresentationView
+                    ? "mb-2"
+                    : ""
               }`}
             >
               <button
@@ -534,7 +618,7 @@ export default function ViewerApp() {
               </button>
               <div
                 className={`pl-5 ${
-                  isPresentationView
+                  isPresentationView && presentationRoomsOpen
                     ? "flex h-full min-h-0 flex-1 flex-col"
                     : ""
                 }`}
